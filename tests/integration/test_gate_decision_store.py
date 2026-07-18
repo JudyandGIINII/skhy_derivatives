@@ -11,6 +11,7 @@ from skhy_research.adapters.persistence.gate_decision_store import (
     PostgresGateDecisionStore,
 )
 from skhy_research.adapters.persistence.schema import gate_decision
+from skhy_research.application.gate_decision_seed import seed_confirmed_gate_decisions
 from skhy_research.application.gate_registry import InvalidGateDecisionError
 from skhy_research.application.gate_registry_loader import load_gate_registry
 from skhy_research.domain.gate import GateDecision, GateStatus
@@ -67,6 +68,28 @@ def test_loader_rejects_incomplete_confirmed_decision_from_postgres(clean_pg) ->
 
     with pytest.raises(InvalidGateDecisionError, match="필드 누락"):
         load_gate_registry(store)
+
+
+@pytest.mark.integration
+def test_seed_confirmed_decisions_unblocks_gates_in_runtime_registry(clean_pg) -> None:
+    store = PostgresGateDecisionStore(clean_pg)
+    # 2026-09-01T00:00:00Z: seed confirmed_at 이후, 가장 이른 valid_until 이전.
+    seed_as_of = 1_788_220_800_000_000_000
+
+    first = seed_confirmed_gate_decisions(store, recorded_at_utc=seed_as_of)
+    assert {outcome.action for outcome in first} == {"inserted"}
+
+    registry = load_gate_registry(store)
+    for gate_id in ("G-02", "G-04", "G-06"):
+        assert registry.effective_status(gate_id, seed_as_of) == GateStatus.CONFIRMED
+        assert registry.blocks(gate_id, seed_as_of) is False
+
+    # 반복 실행은 중복 행을 만들지 않는다.
+    second = seed_confirmed_gate_decisions(store, recorded_at_utc=seed_as_of + 1)
+    assert {outcome.action for outcome in second} == {"already-current"}
+    with clean_pg.connect() as conn:
+        history_count = conn.scalar(select(func.count()).select_from(gate_decision))
+    assert history_count == 3
 
 
 @pytest.mark.integration
