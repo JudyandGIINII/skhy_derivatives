@@ -23,8 +23,22 @@ class ProviderError(RuntimeError):
 
 
 class ProviderAuthenticationError(ProviderError):
-    def __init__(self, provider_name: str) -> None:
-        super().__init__(provider_name, "인증 실패 또는 token 만료")
+    def __init__(self, provider_name: str, error_code: str | None = None) -> None:
+        suffix = f" (code={error_code})" if error_code else ""
+        super().__init__(provider_name, f"인증 실패 또는 token 만료{suffix}")
+        self.error_code = error_code
+
+
+class ProviderAccessDeniedError(ProviderError):
+    """인증된 요청이 권한·허용 IP·서비스 신청 조건으로 거부됨."""
+
+    def __init__(self, provider_name: str, error_code: str | None = None) -> None:
+        suffix = f" (code={error_code})" if error_code else ""
+        super().__init__(
+            provider_name,
+            f"접근 거부(권한, 허용 IP 또는 서비스 신청 상태 확인 필요){suffix}",
+        )
+        self.error_code = error_code
 
 
 class ProviderRateLimitError(ProviderError):
@@ -36,6 +50,34 @@ class ProviderRateLimitError(ProviderError):
 class ProviderTimeoutError(ProviderError):
     def __init__(self, provider_name: str) -> None:
         super().__init__(provider_name, "요청 timeout")
+
+
+class ProviderTransportError(ProviderError):
+    """DNS·TLS·연결 끊김 등 HTTP 응답 이전의 전송 실패."""
+
+    def __init__(self, provider_name: str) -> None:
+        super().__init__(provider_name, "네트워크 전송 실패")
+
+
+class ProviderResponseError(ProviderError):
+    """비밀값·원문 body를 포함하지 않는 안전한 응답 오류."""
+
+    def __init__(
+        self,
+        provider_name: str,
+        *,
+        status_code: int | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        details: list[str] = []
+        if status_code is not None:
+            details.append(f"HTTP {status_code}")
+        if error_code:
+            details.append(f"code={error_code}")
+        suffix = f" ({', '.join(details)})" if details else ""
+        super().__init__(provider_name, f"예상하지 못한 API 응답{suffix}")
+        self.status_code = status_code
+        self.error_code = error_code
 
 
 class ProviderSchemaDriftError(ProviderError):

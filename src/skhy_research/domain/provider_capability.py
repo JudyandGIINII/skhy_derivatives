@@ -15,6 +15,7 @@ from skhy_research.domain.market import EpochNanos
 
 
 class ProviderCapability(StrEnum):
+    QUOTE_SNAPSHOT = "QUOTE_SNAPSHOT"
     QUOTE_STREAM = "QUOTE_STREAM"
     TRADE_STREAM = "TRADE_STREAM"
     EXPECTED_CLOSING_PRICE = "EXPECTED_CLOSING_PRICE"
@@ -25,6 +26,7 @@ class ProviderCapability(StrEnum):
     BORROW_QUOTE = "BORROW_QUOTE"
     HISTORICAL_BARS = "HISTORICAL_BARS"
     HISTORICAL_STATISTICS = "HISTORICAL_STATISTICS"
+    INSTRUMENT_LOOKUP = "INSTRUMENT_LOOKUP"
     ACCOUNT_SNAPSHOT = "ACCOUNT_SNAPSHOT"
     ORDER_SUBMIT = "ORDER_SUBMIT"
     ORDER_CANCEL = "ORDER_CANCEL"
@@ -64,3 +66,15 @@ class ConnectionHealth(BaseModel):
     measured_latency_ms: float | None = None
     last_event_at_utc: EpochNanos | None = None
     reconnect_count: int = 0
+
+
+class ReadOnlyProbeEvidence(BaseModel):
+    """실 API probe가 반환하는 민감값 없는 최소 증거."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider_name: str
+    endpoint: str
+    record_count: int
+    observed_fields: tuple[str, ...]
+    measured_latency_ms: float

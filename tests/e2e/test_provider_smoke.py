@@ -1,35 +1,67 @@
-"""P0-12 완료조건의 2번째 항목: 사용자 키 주입 환경의 조회 전용 smoke test.
+"""P0-12: 사용자 키 주입 환경의 KRX/KIS/Toss 조회 전용 smoke test.
 
-이 파일은 스캐폴딩만 제공한다. 실제 KRX/KIS/Toss 조회 전용 어댑터는 아직
-구현되지 않았다(G-02 capability probe 결과 확인 후 Phase 1에서 실제 provider
-어댑터를 구현할 예정). 현재는 필요한 환경변수가 없으면 명시적으로 skip한다.
+macOS Keychain 실행:
+``SKHY_SECRET_BACKEND=keychain uv run pytest -m smoke tests/e2e/test_provider_smoke.py -v``
 
-실행: `SKHY_ENV=smoke uv run pytest -m smoke tests/e2e/test_provider_smoke.py -v`
+KIS_ACCOUNT_NO는 요구하지 않으며 계좌·주문 API를 호출하지 않는다.
 """
 
 from __future__ import annotations
 
-import os
+from collections.abc import Callable
 
 import pytest
 
+from skhy_research.adapters.providers.krx import KrxReadOnlyClient
+from skhy_research.adapters.providers.toss import TossReadOnlyClient
+from skhy_research.adapters.secrets.factory import build_secret_provider
+from skhy_research.application.live_capability_probe import (
+    ReadOnlyProbeProvider,
+    build_kis_read_only_probe_provider,
+)
+from skhy_research.domain.provider_capability import ReadOnlyProbeEvidence
+from skhy_research.ports.secrets import SecretProvider
+
 pytestmark = pytest.mark.smoke
 
-_REQUIRED_ENV_VARS = ("KRX_API_KEY", "KIS_APP_KEY", "KIS_APP_SECRET", "TOSS_CLIENT_ID")
 
-
-def _missing_env_vars() -> list[str]:
-    return [name for name in _REQUIRED_ENV_VARS if not os.environ.get(name)]
-
-
-def test_krx_kis_toss_smoke_requires_real_keys() -> None:
-    missing = _missing_env_vars()
+def _require_secrets(provider: SecretProvider, names: tuple[str, ...]) -> None:
+    missing = [name for name in names if not provider.get_secret(name)]
     if missing:
-        pytest.skip(
-            "실제 조회 전용 키가 없어 smoke test를 건너뜀 "
-            f"(누락: {missing}). G-02 해소 및 Phase 1 실제 provider 어댑터 구현 후 재실행."
-        )
-    pytest.fail(
-        "실제 provider 어댑터가 아직 구현되지 않았다 (Phase 1 예정). "
-        "키는 주입됐지만 검증할 실제 어댑터가 없어 smoke test를 완료할 수 없다."
-    )
+        pytest.skip(f"실 API 조회용 키 누락: {missing}")
+
+
+@pytest.mark.parametrize(
+    ("required_secrets", "build_client", "required_field"),
+    [
+        (("KRX_API_KEY",), KrxReadOnlyClient, "BAS_DD"),
+        (
+            ("KIS_APP_KEY", "KIS_APP_SECRET"),
+            build_kis_read_only_probe_provider,
+            "stck_prpr",
+        ),
+        (
+            ("TOSS_CLIENT_ID", "TOSS_CLIENT_SECRET"),
+            TossReadOnlyClient,
+            "symbol",
+        ),
+    ],
+    ids=("krx-daily-stock", "kis-domestic-quote", "toss-stock-info"),
+)
+def test_read_only_provider_live(
+    required_secrets: tuple[str, ...],
+    build_client: Callable[[SecretProvider], ReadOnlyProbeProvider],
+    required_field: str,
+) -> None:
+    secret_provider = build_secret_provider()
+    _require_secrets(secret_provider, required_secrets)
+    client = build_client(secret_provider)
+    try:
+        evidence = client.probe_read_only()
+    finally:
+        client.close()
+
+    assert isinstance(evidence, ReadOnlyProbeEvidence)
+    assert evidence.record_count >= 1
+    assert required_field in evidence.observed_fields
+    assert evidence.measured_latency_ms > 0
