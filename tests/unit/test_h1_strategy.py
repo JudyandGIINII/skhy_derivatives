@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -16,15 +17,18 @@ from skhy_research.domain.enums import (
 )
 from skhy_research.domain.reference import FundSnapshot
 from skhy_research.features.h1_close_pressure.close_pressure import ClosePressureResult
+from skhy_research.strategies.h1_close_rebalance.decision_window import build_decision_window
 from skhy_research.strategies.h1_close_rebalance.lookahead_guard import LookaheadViolationError
 from skhy_research.strategies.h1_close_rebalance.strategy import (
+    NO_SIGNAL_MISSING_REQUIRED_FLOW,
     NO_SIGNAL_NEUTRAL_BAND,
     H1CloseRebalanceStrategy,
     H1ModelScopeMismatchError,
 )
 
-_DECISION_TIME = 1_800_000_000_000_000_000
-_EXPIRES = _DECISION_TIME + 60_000_000_000
+_WINDOW = build_decision_window(date(2026, 7, 15), "15:10:00", "15:19:30")
+_DECISION_TIME = _WINDOW.signal_snapshot_utc
+_EXPIRES = _WINDOW.order_intent_cutoff_utc
 
 
 def _strategy() -> H1CloseRebalanceStrategy:
@@ -145,7 +149,12 @@ def test_lookahead_violation_propagates_and_blocks_signal_generation() -> None:
 
 def test_explain_dict_includes_model_version_and_missing_funds() -> None:
     strategy = _strategy()
-    reduced_pressure = ClosePressureResult(Decimal("0.004"), "reduced", ("FUND_X",))
+    reduced_pressure = ClosePressureResult(
+        Decimal("0.004"),
+        "reduced",
+        ("FUND_X",),
+        promotion_eligible=False,
+    )
     decision = strategy.decide(
         instrument_id="000660",
         feature_set_id="h1_close_pressure@1.0.0",
@@ -159,6 +168,8 @@ def test_explain_dict_includes_model_version_and_missing_funds() -> None:
     )
     assert decision.explain["model_version"] == "reduced"
     assert decision.explain["missing_flow_fund_ids"] == ("FUND_X",)
+    assert decision.signal is None
+    assert decision.no_signal_reason == NO_SIGNAL_MISSING_REQUIRED_FLOW
 
 
 def test_daily_proxy_cannot_enter_original_h1_scope() -> None:

@@ -7,14 +7,20 @@ from datetime import date
 from decimal import Decimal
 
 from skhy_research.application.leverage_universe_discovery import DiscoveredLeveragedProduct
+from skhy_research.domain.calendar import utc_nanos_to_local_datetime
 from skhy_research.domain.enums import AssetClass, MarketDataFeedMode, QualityFlag
 from skhy_research.domain.market import IndicativeValueKind, MarketPriceSnapshot
+from skhy_research.domain.reference import FundSnapshot
 from skhy_research.features.h1_close_pressure.close_pressure import (
     ORIGINAL_H1_LIVE_DATA_RESOLUTION,
     ORIGINAL_H1_PROMOTION_SCOPE,
     ClosePressureResult,
     FundContribution,
     estimated_close_pressure,
+)
+from skhy_research.features.h1_close_pressure.observable_flow import (
+    ObservableFlowInput,
+    calculate_observable_flow_adjustment,
 )
 from skhy_research.features.h1_close_pressure.theoretical_exposure import (
     theoretical_delta_exposure,
@@ -30,7 +36,10 @@ from skhy_research.strategies.h1_close_rebalance.decision_window import (
 )
 from skhy_research.strategies.h1_close_rebalance.lookahead_guard import assert_no_lookahead
 
-H1_LIVE_MODEL_VERSION = "h1_kis_live_listed_notional_reduced_v1"
+H1_LIVE_FULL_MODEL_VERSION = "h1_original_1510_full_v1"
+H1_LIVE_REDUCED_MODEL_VERSION = "h1_original_1510_missing_g03_v1"
+# 기존 import 호환. 원 H1 기본 버전은 full이며 결측 시 아래 reduced ID로 강등한다.
+H1_LIVE_MODEL_VERSION = H1_LIVE_FULL_MODEL_VERSION
 _H1_UNDERLYING_TARGETS = (
     MarketSnapshotTarget("KRX_000660_COMMON_STOCK", "000660", AssetClass.COMMON_STOCK),
     MarketSnapshotTarget("KRX_005930_COMMON_STOCK", "005930", AssetClass.COMMON_STOCK),
@@ -51,15 +60,33 @@ class H1LiveSnapshotBlockedError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class H1LiveFundInput:
-    fund_id: str
-    beta: Decimal
-    listed_notional_proxy: Decimal
-    kappa: Decimal
-    observable_flow_adjustment: Decimal | None
-    basis_date: date
+class KappaRegimeEstimate:
+    value: Decimal
+    regime: str
+    fitted_through_date: date
     available_at_utc: int
-    input_record_ids: tuple[str, ...]
+    input_record_id: str
+    model_version: str
+
+    def __post_init__(self) -> None:
+        if not self.value.is_finite():
+            raise H1LiveInputError("kappa는 유한 Decimal이어야 한다")
+        if self.available_at_utc < 0:
+            raise H1LiveInputError("kappa available_at_utc는 음수일 수 없다")
+        if not self.regime.strip() or not self.input_record_id.strip() or not self.model_version.strip():
+            raise H1LiveInputError("kappa의 regime·lineage·model_version은 비어 있을 수 없다")
+
+
+@dataclass(frozen=True)
+class H1LiveFundInput:
+    prior_fund_snapshot: FundSnapshot
+    fund_snapshot_record_id: str
+    kappa_regime: KappaRegimeEstimate
+    observable_flow: ObservableFlowInput
+
+    @property
+    def fund_id(self) -> str:
+        return self.prior_fund_snapshot.fund_id
 
 
 @dataclass(frozen=True)
@@ -97,9 +124,13 @@ class H1LiveIndicativeValueEvidence:
 class H1LiveFundFeature:
     fund_id: str
     beta: Decimal
-    listed_notional_proxy: Decimal
+    prior_nav: Decimal
     theoretical_delta_exposure: Decimal
     kappa: Decimal
+    kappa_regime: str
+    kappa_model_version: str
+    observable_flow_adjustment: Decimal | None
+    missing_flow_fields: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -115,7 +146,7 @@ class H1LiveFeatureSet:
     close_pressure: ClosePressureResult
     live_snapshots_used: tuple[MarketPriceSnapshot, ...]
     input_record_ids: tuple[str, ...]
-    model_version: str = H1_LIVE_MODEL_VERSION
+    model_version: str = H1_LIVE_FULL_MODEL_VERSION
     data_resolution: str = ORIGINAL_H1_LIVE_DATA_RESOLUTION
     promotion_scope: str = ORIGINAL_H1_PROMOTION_SCOPE
     promotion_eligible: bool = True
@@ -255,39 +286,54 @@ def build_h1_live_feature(
         if item.fund_id not in primary:
             raise H1LiveInputError(f"fund_id={item.fund_id}의 live snapshot이 없다")
         seen_funds.add(item.fund_id)
-        for record_id in item.input_record_ids:
+        snapshot = item.prior_fund_snapshot
+        lineage.add(item.fund_snapshot_record_id)
+        lineage.add(item.kappa_regime.input_record_id)
+        flow = calculate_observable_flow_adjustment(
+            item.observable_flow,
+            decision_time_utc=decision_time_utc,
+        )
+        for record_id in flow.input_record_ids:
             lineage.add(record_id)
         exposure = theoretical_delta_exposure(
-            item.beta,
-            item.listed_notional_proxy,
+            snapshot.leverage_beta,
+            snapshot.aum,
             underlying_return,
         )
         fund_features.append(
             H1LiveFundFeature(
                 fund_id=item.fund_id,
-                beta=item.beta,
-                listed_notional_proxy=item.listed_notional_proxy,
+                beta=snapshot.leverage_beta,
+                prior_nav=snapshot.aum,
                 theoretical_delta_exposure=exposure,
-                kappa=item.kappa,
+                kappa=item.kappa_regime.value,
+                kappa_regime=item.kappa_regime.regime,
+                kappa_model_version=item.kappa_regime.model_version,
+                observable_flow_adjustment=flow.value,
+                missing_flow_fields=tuple(field.value for field in flow.missing_fields),
             )
         )
         contributions.append(
             FundContribution(
                 fund_id=item.fund_id,
                 theoretical_delta_exposure=exposure,
-                kappa=item.kappa,
-                observable_flow_adjustment=item.observable_flow_adjustment,
+                kappa=item.kappa_regime.value,
+                observable_flow_adjustment=flow.value,
+                missing_flow_fields=tuple(field.value for field in flow.missing_fields),
             )
         )
 
     base_pressure = estimated_close_pressure(contributions, underlying_20d_adv_notional)
+    is_full = not base_pressure.missing_flow_fund_ids
+    model_version = H1_LIVE_FULL_MODEL_VERSION if is_full else H1_LIVE_REDUCED_MODEL_VERSION
     close_pressure = ClosePressureResult(
         value=base_pressure.value,
-        model_version=H1_LIVE_MODEL_VERSION,
+        model_version=model_version,
         missing_flow_fund_ids=base_pressure.missing_flow_fund_ids,
+        missing_flow_inputs=base_pressure.missing_flow_inputs,
         data_resolution=ORIGINAL_H1_LIVE_DATA_RESOLUTION,
         promotion_scope=ORIGINAL_H1_PROMOTION_SCOPE,
-        promotion_eligible=True,
+        promotion_eligible=is_full,
     )
     indicative_evidence = tuple(
         H1LiveIndicativeValueEvidence(
@@ -315,6 +361,8 @@ def build_h1_live_feature(
         close_pressure=close_pressure,
         live_snapshots_used=tuple(all_snapshots),
         input_record_ids=lineage.values,
+        model_version=model_version,
+        promotion_eligible=is_full,
     )
 
 
@@ -416,14 +464,22 @@ def _assert_fund_available(
     trading_date: date,
     decision_time_utc: int,
 ) -> None:
-    if item.basis_date >= trading_date:
-        raise H1LiveInputError(f"fund_id={item.fund_id}의 listed-notional이 직전일 이전이 아니다")
-    if item.available_at_utc > decision_time_utc:
-        raise H1LiveInputError(f"fund_id={item.fund_id}의 listed-notional이 decision 후에 가용해졌다")
-    if item.listed_notional_proxy <= 0:
-        raise H1LiveInputError(f"fund_id={item.fund_id}의 listed-notional은 0보다 커야 한다")
-    if not item.input_record_ids or any(not value.strip() for value in item.input_record_ids):
-        raise H1LiveInputError(f"fund_id={item.fund_id}의 lineage가 없다")
+    snapshot = item.prior_fund_snapshot
+    effective_date = utc_nanos_to_local_datetime(snapshot.effective_at, snapshot.venue).date()
+    if effective_date >= trading_date:
+        raise H1LiveInputError(f"fund_id={item.fund_id}의 NAV/AUM이 전일 확정치가 아니다")
+    assert_no_lookahead([snapshot], decision_time_utc)
+    if snapshot.aum <= 0 or snapshot.nav <= 0:
+        raise H1LiveInputError(f"fund_id={item.fund_id}의 prior NAV/AUM은 0보다 커야 한다")
+    if not item.fund_snapshot_record_id.strip():
+        raise H1LiveInputError(f"fund_id={item.fund_id}의 FundSnapshot lineage가 없다")
+    if item.kappa_regime.fitted_through_date >= trading_date:
+        raise H1LiveInputError(f"fund_id={item.fund_id}의 kappa가 학습 구간 이후 데이터를 사용했다")
+    if item.kappa_regime.available_at_utc > decision_time_utc:
+        raise H1LiveInputError(f"fund_id={item.fund_id}의 kappa가 decision 이후에 가용해졌다")
+    replication = item.observable_flow.replication.replication_type
+    if replication is not None and replication is not snapshot.replication_type:
+        raise H1LiveInputError(f"fund_id={item.fund_id}의 복제방식 근거가 FundSnapshot과 다르다")
 
 
 def _pct_difference(reference: Decimal, observed: Decimal) -> Decimal:

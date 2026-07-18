@@ -1,8 +1,8 @@
 """P1-09: H1 feature -> strategy -> 체결 -> 통계 -> 승격판정 전체 파이프라인 연결 검증.
 
-**중요**: 합성(synthetic) 데이터로 배선(wiring)이 올바른지만 검증한다. 실제
-전략 유효성 검증(진짜 PASS/HOLD/REJECT 판정)은 Phase 3에서 실데이터·60거래일
-전진관측으로 수행한다(PRD 11.1).
+**중요**: 합성(synthetic) 데이터로 배선(wiring)이 올바른지만 검증한다.
+합성 손익은 승격 비대상으로 표시하여 절대 PASS를 만들지 않는다. 원 H1 실적 검증은
+PRD 10.2의 최소 120 KRX 거래일과 G-03 실데이터를 요구한다.
 """
 
 from __future__ import annotations
@@ -148,8 +148,12 @@ def test_h1_pipeline_from_close_pressure_to_promotion_verdict() -> None:
         stress_cumulative_pnl=sum((t.pnl for t in trades), Decimal("0")),
         top_1_day_profit_share=top1_share,
         mdd_pct=mdd,
+        model_version="h1_synthetic_wiring_fixture_v1",
+        data_resolution="synthetic-fixture",
+        promotion_scope="h1-wiring-only",
+        promotion_eligible=False,
     )
     result = evaluate_promotion(promotion_input, criteria)
 
-    assert result.verdict in {PromotionVerdict.PASS, PromotionVerdict.HOLD, PromotionVerdict.REJECT}
-    assert result.verdict == PromotionVerdict.PASS  # 모든 합성 신호가 이익이 나도록 구성했으므로 PASS여야 한다
+    assert result.verdict is PromotionVerdict.HOLD
+    assert result.promotion_eligible is False

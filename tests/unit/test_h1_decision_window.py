@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from datetime import date, time
 
+import pytest
+
 from skhy_research.application.config import load_settings
 from skhy_research.domain.calendar import VENUE_SESSION_SCHEDULE, local_datetime_to_utc_nanos
 from skhy_research.domain.enums import Session, Venue
-from skhy_research.strategies.h1_close_rebalance.decision_window import build_decision_window
+from skhy_research.strategies.h1_close_rebalance.decision_window import (
+    H1DecisionWindowError,
+    assert_order_intent_cutoff,
+    build_decision_window,
+)
 
 _A_WEDNESDAY = date(2026, 7, 15)
 
@@ -35,3 +41,19 @@ def test_order_intent_cutoff_precedes_close_auction_start() -> None:
     close_auction_start_utc = local_datetime_to_utc_nanos(_A_WEDNESDAY, close_auction.start, Venue.KRX)
 
     assert window.order_intent_cutoff_utc <= close_auction_start_utc
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "cutoff"),
+    (("15:09:59", "15:19:30"), ("15:10:00", "15:19:31")),
+)
+def test_original_h1_rejects_any_non_prd_decision_window(snapshot: str, cutoff: str) -> None:
+    with pytest.raises(H1DecisionWindowError):
+        build_decision_window(_A_WEDNESDAY, snapshot, cutoff)
+
+
+def test_order_intent_must_expire_at_exact_151930_cutoff() -> None:
+    window = build_decision_window(_A_WEDNESDAY, "15:10:00", "15:19:30")
+
+    with pytest.raises(H1DecisionWindowError, match="정확히"):
+        assert_order_intent_cutoff(window, window.order_intent_cutoff_utc + 1)

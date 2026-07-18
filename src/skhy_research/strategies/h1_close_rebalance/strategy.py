@@ -10,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from skhy_research.domain.enums import SignalDirection
+from skhy_research.domain.calendar import utc_nanos_to_local_datetime
+from skhy_research.domain.enums import SignalDirection, Venue
 from skhy_research.domain.market import MarketPriceSnapshot
 from skhy_research.domain.reference import FundSnapshot
 from skhy_research.domain.strategy import Signal
@@ -19,9 +20,17 @@ from skhy_research.features.h1_close_pressure.close_pressure import (
     ORIGINAL_H1_PROMOTION_SCOPE,
     ClosePressureResult,
 )
+from skhy_research.strategies.h1_close_rebalance.decision_window import (
+    H1_ORDER_INTENT_CUTOFF_KST,
+    H1_SIGNAL_SNAPSHOT_TIME_KST,
+    assert_live_decision_time,
+    assert_order_intent_cutoff,
+    build_decision_window,
+)
 from skhy_research.strategies.h1_close_rebalance.lookahead_guard import assert_no_lookahead
 
 NO_SIGNAL_NEUTRAL_BAND = "close_pressure_within_neutral_band"
+NO_SIGNAL_MISSING_REQUIRED_FLOW = "required_observable_flow_missing"
 
 
 class H1ModelScopeMismatchError(RuntimeError):
@@ -63,6 +72,15 @@ class H1CloseRebalanceStrategy:
         live_snapshots_used: list[MarketPriceSnapshot] | None = None,
     ) -> H1Decision:
         self._assert_model_scope(close_pressure)
+        if close_pressure.promotion_scope == ORIGINAL_H1_PROMOTION_SCOPE:
+            trading_date = utc_nanos_to_local_datetime(decision_time_utc, Venue.KRX).date()
+            window = build_decision_window(
+                trading_date,
+                H1_SIGNAL_SNAPSHOT_TIME_KST,
+                H1_ORDER_INTENT_CUTOFF_KST,
+            )
+            assert_live_decision_time(window, decision_time_utc)
+            assert_order_intent_cutoff(window, expires_at_utc)
         self._assert_live_snapshot_lineage(close_pressure, input_record_ids, live_snapshots_used)
         assert_no_lookahead(fund_snapshots_used, decision_time_utc, live_snapshots_used)
 
@@ -73,11 +91,24 @@ class H1CloseRebalanceStrategy:
             "promotion_scope": close_pressure.promotion_scope,
             "promotion_eligible": close_pressure.promotion_eligible,
             "missing_flow_fund_ids": close_pressure.missing_flow_fund_ids,
+            "missing_flow_inputs": tuple(
+                (item.fund_id, item.fields) for item in close_pressure.missing_flow_inputs
+            ),
             "neutral_band": str(self._neutral_band),
             "live_snapshot_record_ids": tuple(
                 snapshot.record_id for snapshot in live_snapshots_used or []
             ),
         }
+
+        if (
+            close_pressure.promotion_scope == ORIGINAL_H1_PROMOTION_SCOPE
+            and not close_pressure.promotion_eligible
+        ):
+            return H1Decision(
+                signal=None,
+                no_signal_reason=NO_SIGNAL_MISSING_REQUIRED_FLOW,
+                explain=explain,
+            )
 
         if abs(close_pressure.value) <= self._neutral_band:
             return H1Decision(signal=None, no_signal_reason=NO_SIGNAL_NEUTRAL_BAND, explain=explain)
@@ -111,6 +142,7 @@ class H1CloseRebalanceStrategy:
             )
         if (
             not close_pressure.promotion_eligible
+            and close_pressure.promotion_scope != ORIGINAL_H1_PROMOTION_SCOPE
             and self.strategy_version != close_pressure.model_version
         ):
             raise H1ModelScopeMismatchError(

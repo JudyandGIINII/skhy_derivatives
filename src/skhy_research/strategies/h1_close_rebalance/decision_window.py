@@ -8,6 +8,9 @@ from datetime import date, time
 from skhy_research.domain.calendar import local_datetime_to_utc_nanos
 from skhy_research.domain.enums import Venue
 
+H1_SIGNAL_SNAPSHOT_TIME_KST = "15:10:00"
+H1_ORDER_INTENT_CUTOFF_KST = "15:19:30"
+
 
 @dataclass(frozen=True)
 class H1DecisionWindow:
@@ -22,6 +25,14 @@ class H1DecisionWindowError(ValueError):
 def build_decision_window(
     trading_date: date, signal_snapshot_time_kst: str, order_intent_cutoff_kst: str
 ) -> H1DecisionWindow:
+    if signal_snapshot_time_kst != H1_SIGNAL_SNAPSHOT_TIME_KST:
+        raise H1DecisionWindowError(
+            f"원 H1 signal snapshot은 {H1_SIGNAL_SNAPSHOT_TIME_KST} KST여야 한다"
+        )
+    if order_intent_cutoff_kst != H1_ORDER_INTENT_CUTOFF_KST:
+        raise H1DecisionWindowError(
+            f"원 H1 order intent cutoff은 {H1_ORDER_INTENT_CUTOFF_KST} KST여야 한다"
+        )
     snapshot_time = time.fromisoformat(signal_snapshot_time_kst)
     cutoff_time = time.fromisoformat(order_intent_cutoff_kst)
     return H1DecisionWindow(
@@ -38,4 +49,12 @@ def assert_live_decision_time(window: H1DecisionWindow, decision_time_utc: int) 
             "live decision_time이 15:10 snapshot~order intent cutoff 범위 밖이다: "
             f"snapshot={window.signal_snapshot_utc}, decision={decision_time_utc}, "
             f"cutoff={window.order_intent_cutoff_utc}"
+        )
+
+
+def assert_order_intent_cutoff(window: H1DecisionWindow, expires_at_utc: int) -> None:
+    if expires_at_utc != window.order_intent_cutoff_utc:
+        raise H1DecisionWindowError(
+            "원 H1 OrderIntent 만료시각은 15:19:30 KST cutoff과 정확히 같아야 한다: "
+            f"expected={window.order_intent_cutoff_utc}, actual={expires_at_utc}"
         )
