@@ -1,0 +1,267 @@
+{
+  "schema_version": "g04-krx-detail-probe-v1",
+  "captured_at_utc": "2026-07-18T10:58:25.849553Z",
+  "basis_date": "20260716",
+  "safety_scope": {
+    "method": "GET",
+    "secret_backend": "keychain",
+    "secret_persisted": false,
+    "backfill_executed": false
+  },
+  "endpoints": {
+    "etf_daily": {
+      "path": "/svc/apis/etp/etf_bydd_trd",
+      "http_status": 200,
+      "record_count": 1146,
+      "fields": [
+        "ACC_TRDVAL",
+        "ACC_TRDVOL",
+        "BAS_DD",
+        "CMPPREVDD_IDX",
+        "CMPPREVDD_PRC",
+        "FLUC_RT",
+        "FLUC_RT_IDX",
+        "IDX_IND_NM",
+        "INVSTASST_NETASST_TOTAMT",
+        "ISU_CD",
+        "ISU_NM",
+        "LIST_SHRS",
+        "MKTCAP",
+        "NAV",
+        "OBJ_STKPRC_IDX",
+        "TDD_CLSPRC",
+        "TDD_HGPRC",
+        "TDD_LWPRC",
+        "TDD_OPNPRC"
+      ]
+    },
+    "etn_daily": {
+      "path": "/svc/apis/etp/etn_bydd_trd",
+      "http_status": 200,
+      "record_count": 386,
+      "fields": [
+        "ACC_TRDVAL",
+        "ACC_TRDVOL",
+        "BAS_DD",
+        "CMPPREVDD_IDX",
+        "CMPPREVDD_PRC",
+        "FLUC_RT",
+        "FLUC_RT_IDX",
+        "IDX_IND_NM",
+        "INDIC_VAL_AMT",
+        "ISU_CD",
+        "ISU_NM",
+        "LIST_SHRS",
+        "MKTCAP",
+        "OBJ_STKPRC_IDX",
+        "PER1SECU_INDIC_VAL",
+        "TDD_CLSPRC",
+        "TDD_HGPRC",
+        "TDD_LWPRC",
+        "TDD_OPNPRC"
+      ]
+    },
+    "krx_index_daily": {
+      "path": "/svc/apis/idx/krx_dd_trd",
+      "http_status": 401,
+      "record_count": null,
+      "response_keys": [
+        "respCode",
+        "respMsg"
+      ],
+      "response_message_persisted": false
+    }
+  },
+  "single_stock_summary": {
+    "product_count": 18,
+    "etf_count": 16,
+    "etn_count": 2,
+    "index_name_contains_futures_count": 6,
+    "index_name_contains_tr_count": 2,
+    "other_index_name_count": 10,
+    "pcf_like_fields": [],
+    "publication_time_like_fields": []
+  },
+  "products": [
+    {
+      "type": "ETF",
+      "isu_cd": "0198D0",
+      "isu_nm": "1Q SK하이닉스선물단일종목레버리지",
+      "index_name": "KRX SK하이닉스 선물 지수",
+      "nav_or_indicative_value": "12756.80",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "2320000",
+      "underlying_index_value": "10357.97"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0198B0",
+      "isu_nm": "1Q 삼성전자선물단일종목레버리지",
+      "index_name": "KRX 삼성전자 선물 지수",
+      "nav_or_indicative_value": "12534.11",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "2055000",
+      "underlying_index_value": "4540.45"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0194T0",
+      "isu_nm": "ACE SK하이닉스단일종목레버리지",
+      "index_name": "KRX SK하이닉스 지수",
+      "nav_or_indicative_value": "12226.72",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "6475000",
+      "underlying_index_value": "10759.35"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0194M0",
+      "isu_nm": "ACE 삼성전자단일종목레버리지",
+      "index_name": "KRX 삼성전자 지수",
+      "nav_or_indicative_value": "12184.74",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "5575000",
+      "underlying_index_value": "4775.28"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0194R0",
+      "isu_nm": "KIWOOM SK하이닉스선물단일종목레버리지",
+      "index_name": "KRX SK하이닉스 선물 지수",
+      "nav_or_indicative_value": "11888.37",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "1475000",
+      "underlying_index_value": "10357.97"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0194N0",
+      "isu_nm": "KIWOOM 삼성전자선물단일종목레버리지",
+      "index_name": "KRX 삼성전자 선물 지수",
+      "nav_or_indicative_value": "11965.28",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "900000",
+      "underlying_index_value": "4540.45"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0193T0",
+      "isu_nm": "KODEX SK하이닉스단일종목레버리지",
+      "index_name": "KRX SK하이닉스 지수",
+      "nav_or_indicative_value": "14497.91",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "260825000",
+      "underlying_index_value": "10759.35"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0193W0",
+      "isu_nm": "KODEX 삼성전자단일종목레버리지",
+      "index_name": "KRX 삼성전자 지수",
+      "nav_or_indicative_value": "13172.08",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "172600000",
+      "underlying_index_value": "4775.28"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0193K0",
+      "isu_nm": "PLUS 삼성전자단일종목레버리지",
+      "index_name": "KRX 삼성전자 지수",
+      "nav_or_indicative_value": "13244.65",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "1250000",
+      "underlying_index_value": "4775.28"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0193L0",
+      "isu_nm": "PLUS 삼성전자선물단일종목인버스2X",
+      "index_name": "KRX 삼성전자 선물 지수",
+      "nav_or_indicative_value": "17437.24",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "4080000",
+      "underlying_index_value": "4540.45"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0192L0",
+      "isu_nm": "RISE SK하이닉스단일종목레버리지",
+      "index_name": "KRX SK하이닉스 지수",
+      "nav_or_indicative_value": "12415.79",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "5800000",
+      "underlying_index_value": "10759.35"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0192M0",
+      "isu_nm": "RISE 삼성전자단일종목레버리지",
+      "index_name": "KRX 삼성전자 지수",
+      "nav_or_indicative_value": "12247.34",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "4175000",
+      "underlying_index_value": "4775.28"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0197W0",
+      "isu_nm": "SOL SK하이닉스단일종목레버리지",
+      "index_name": "KRX SK하이닉스 지수",
+      "nav_or_indicative_value": "12087.80",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "6000000",
+      "underlying_index_value": "10759.35"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0197X0",
+      "isu_nm": "SOL SK하이닉스선물단일종목인버스2X",
+      "index_name": "KRX SK하이닉스 선물 지수",
+      "nav_or_indicative_value": "11332.37",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "14125000",
+      "underlying_index_value": "10357.97"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0195S0",
+      "isu_nm": "TIGER SK하이닉스단일종목레버리지",
+      "index_name": "KRX SK하이닉스 지수",
+      "nav_or_indicative_value": "12222.34",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "165300000",
+      "underlying_index_value": "10759.35"
+    },
+    {
+      "type": "ETF",
+      "isu_cd": "0195R0",
+      "isu_nm": "TIGER 삼성전자단일종목레버리지",
+      "index_name": "KRX 삼성전자 지수",
+      "nav_or_indicative_value": "12105.13",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "102900000",
+      "underlying_index_value": "4775.28"
+    },
+    {
+      "type": "ETN",
+      "isu_cd": "520101",
+      "isu_nm": "미래에셋 레버리지 SK하이닉스 단일종목ETN",
+      "index_name": "KRX SK하이닉스 TR 레버리지 지수",
+      "nav_or_indicative_value": "14278.21",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "5000000",
+      "underlying_index_value": "52061.96"
+    },
+    {
+      "type": "ETN",
+      "isu_cd": "520100",
+      "isu_nm": "미래에셋 레버리지 삼성전자 단일종목 ETN",
+      "index_name": "KRX 삼성전자 TR 레버리지 지수",
+      "nav_or_indicative_value": "12412.61",
+      "net_asset_or_indicative_total": "0",
+      "listed_shares": "5000000",
+      "underlying_index_value": "14616.53"
+    }
+  ]
+}
