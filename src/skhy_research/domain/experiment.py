@@ -12,9 +12,12 @@ import hashlib
 import subprocess
 import time
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from skhy_research.domain.enums import PromotionVerdict
 
 
 class ExecutionManifest(BaseModel):
@@ -68,6 +71,25 @@ class ExecutionEdge(BaseModel):
     order_id: str | None = None
     fill_id: str | None = None
     position_update_id: str | None = None
+    created_at_utc: int
+
+
+class ExperimentResult(BaseModel):
+    """PRD 8.2 ExperimentResult: 데이터 버전·분할·비용 가정·지표·CI·스트레스와 최종 판정."""
+
+    model_config = ConfigDict(frozen=True)
+
+    experiment_id: str
+    run_id: str
+    strategy_id: str
+    strategy_version: str
+    data_snapshot_id: str
+    split_name: str  # train|validation|test|walk_forward_<n>
+    cost_scenario: str  # base|stress_2x|liquidity_half 등
+    metrics: dict[str, Decimal] = Field(default_factory=dict)
+    confidence_intervals: dict[str, tuple[Decimal, Decimal]] = Field(default_factory=dict)
+    verdict: PromotionVerdict
+    verdict_reason: str
     created_at_utc: int
 
 
