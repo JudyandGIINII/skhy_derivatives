@@ -420,6 +420,42 @@ def test_http_429_maps_retry_after_without_body() -> None:
     assert "krx-test-secret" not in str(exc_info.value)
 
 
+def test_kis_403_egw00133_maps_to_rate_limit_not_access_denied() -> None:
+    """KIS 접근토큰 발급 1분당 1회 제한(EGW00133)은 403으로 오지만 권한 거부가 아니다."""
+    secrets = _RecordingSecrets({"KIS_APP_KEY": "kis-key", "KIS_APP_SECRET": "kis-secret"})
+    client = KisReadOnlyClient(
+        secrets,
+        http_client=_http_client(
+            lambda request: httpx.Response(
+                403,
+                json={
+                    "error_code": "EGW00133",
+                    "error_description": "접근토큰 발급 잠시 후 다시 시도하세요(1분당 1회)",
+                },
+            )
+        ),
+    )
+
+    with pytest.raises(ProviderRateLimitError) as exc_info:
+        client.fetch_domestic_quote("000660")
+    assert exc_info.value.retry_after_seconds == 60.0
+    assert "kis-secret" not in str(exc_info.value)
+
+
+def test_kis_403_unknown_code_still_maps_to_access_denied() -> None:
+    """알려진 속도제한 코드가 아닌 403은 기존대로 권한 거부로 분류한다."""
+    secrets = _RecordingSecrets({"KIS_APP_KEY": "kis-key", "KIS_APP_SECRET": "kis-secret"})
+    client = KisReadOnlyClient(
+        secrets,
+        http_client=_http_client(
+            lambda request: httpx.Response(403, json={"error_code": "EGW00201"})
+        ),
+    )
+
+    with pytest.raises(ProviderAccessDeniedError):
+        client.fetch_domestic_quote("000660")
+
+
 class _ProbeDouble:
     def __init__(self, *, error: Exception | None = None) -> None:
         self._error = error

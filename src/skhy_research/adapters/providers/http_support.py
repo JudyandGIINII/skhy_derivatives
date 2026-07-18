@@ -24,6 +24,10 @@ from skhy_research.ports.secrets import SecretProvider
 
 _SAFE_ERROR_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 
+# HTTP 403으로 응답하지만 실제로는 권한 거부가 아니라 호출 속도제한인 provider별
+# 알려진 오류 코드. 예: KIS 접근토큰 발급 "EGW00133"(1분당 1회 제한).
+_RATE_LIMIT_ERROR_CODES_ON_403 = frozenset({"EGW00133"})
+
 
 def require_secret(secret_provider: SecretProvider, provider_name: str, name: str) -> str:
     value = secret_provider.get_secret(name)
@@ -49,6 +53,9 @@ def request_json(
     if response.status_code == 401:
         raise ProviderAuthenticationError(provider_name, error_code) from None
     if response.status_code == 403:
+        if error_code in _RATE_LIMIT_ERROR_CODES_ON_403:
+            retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+            raise ProviderRateLimitError(provider_name, retry_after) from None
         raise ProviderAccessDeniedError(provider_name, error_code) from None
     if response.status_code == 429:
         retry_after = _parse_retry_after(response.headers.get("Retry-After"))
@@ -87,6 +94,7 @@ def _extract_error_code(response: httpx.Response) -> str | None:
         return None
     candidates: list[object] = [
         payload.get("msg_cd"),
+        payload.get("error_code"),
         payload.get("resultCode"),
         payload.get("code"),
         payload.get("error"),
