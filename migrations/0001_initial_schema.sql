@@ -41,3 +41,25 @@ CREATE TABLE IF NOT EXISTS execution_edge (
     position_update_id  VARCHAR,
     created_at_utc      BIGINT NOT NULL
 );
+
+-- P0-08
+CREATE TABLE IF NOT EXISTS raw_record_catalog (
+    raw_record_id       VARCHAR PRIMARY KEY,
+    source               VARCHAR NOT NULL,
+    dataset              VARCHAR NOT NULL,
+    dedupe_key           VARCHAR NOT NULL,
+    payload_checksum     VARCHAR NOT NULL,
+    received_at_utc      BIGINT NOT NULL,
+    collection_run_id    VARCHAR NOT NULL,
+    provider_sequence    VARCHAR,
+    storage_path         VARCHAR NOT NULL,
+    conflict_with        VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS ingestion_checkpoint (
+    source          VARCHAR NOT NULL,
+    dataset         VARCHAR NOT NULL,
+    cursor          VARCHAR NOT NULL,
+    updated_at_utc  BIGINT NOT NULL,
+    PRIMARY KEY (source, dataset)
+);

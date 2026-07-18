@@ -68,6 +68,32 @@ execution_edge = Table(
     Column("created_at_utc", BigInteger, nullable=False),
 )
 
+raw_record_catalog = Table(
+    "raw_record_catalog",
+    metadata,
+    Column("raw_record_id", String, primary_key=True),
+    Column("source", String, nullable=False),
+    Column("dataset", String, nullable=False),
+    Column("dedupe_key", String, nullable=False),
+    Column("payload_checksum", String, nullable=False),
+    Column("received_at_utc", BigInteger, nullable=False),
+    Column("collection_run_id", String, nullable=False),
+    Column("provider_sequence", String, nullable=True),
+    Column("storage_path", String, nullable=False),
+    Column("conflict_with", String, nullable=True),
+    # dedupe_key는 conflict가 없는 한 (source, dataset) 안에서 유일해야 한다.
+    # 유일성은 애플리케이션 레벨에서 강제한다(raw_recorder.py): 조회 후 조건부 삽입.
+)
+
+ingestion_checkpoint = Table(
+    "ingestion_checkpoint",
+    metadata,
+    Column("source", String, primary_key=True),
+    Column("dataset", String, primary_key=True),
+    Column("cursor", String, nullable=False),
+    Column("updated_at_utc", BigInteger, nullable=False),
+)
+
 
 def init_schema(engine: Engine) -> None:
     """테이블이 없으면 생성한다 (멱등). 기존 테이블·데이터는 건드리지 않는다."""
