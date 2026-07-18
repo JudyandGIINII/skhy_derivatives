@@ -31,17 +31,36 @@ class PromotionInput:
     stress_cumulative_pnl: Decimal
     top_1_day_profit_share: Decimal
     mdd_pct: Decimal
+    model_version: str = "unspecified"
+    data_resolution: str = "unspecified"
+    promotion_scope: str = "strategy-default"
+    promotion_eligible: bool = True
 
 
 @dataclass(frozen=True)
 class PromotionResult:
     verdict: PromotionVerdict
     reasons: tuple[str, ...]
+    model_version: str = "unspecified"
+    data_resolution: str = "unspecified"
+    promotion_scope: str = "strategy-default"
+    promotion_eligible: bool = True
 
 
 def evaluate_promotion(data: PromotionInput, criteria: PromotionCriteria) -> PromotionResult:
+    if not data.promotion_eligible:
+        return _result(
+            data,
+            PromotionVerdict.HOLD,
+            (
+                "승격 비대상 모델: "
+                f"scope={data.promotion_scope}, model={data.model_version}, "
+                f"resolution={data.data_resolution}",
+            ),
+        )
     if data.trade_count < criteria.min_sample_size:
-        return PromotionResult(
+        return _result(
+            data,
             PromotionVerdict.HOLD,
             (f"표본 부족: trade_count={data.trade_count} < min={criteria.min_sample_size}",),
         )
@@ -65,5 +84,18 @@ def evaluate_promotion(data: PromotionInput, criteria: PromotionCriteria) -> Pro
         failures.append(f"mdd_pct={data.mdd_pct} > max={criteria.max_strategy_mdd_pct}")
 
     if failures:
-        return PromotionResult(PromotionVerdict.REJECT, tuple(failures))
-    return PromotionResult(PromotionVerdict.PASS, ())
+        return _result(data, PromotionVerdict.REJECT, tuple(failures))
+    return _result(data, PromotionVerdict.PASS, ())
+
+
+def _result(
+    data: PromotionInput, verdict: PromotionVerdict, reasons: tuple[str, ...]
+) -> PromotionResult:
+    return PromotionResult(
+        verdict=verdict,
+        reasons=reasons,
+        model_version=data.model_version,
+        data_resolution=data.data_resolution,
+        promotion_scope=data.promotion_scope,
+        promotion_eligible=data.promotion_eligible,
+    )

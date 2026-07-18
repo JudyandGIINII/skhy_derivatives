@@ -32,8 +32,14 @@ GATE_DEFINITIONS: dict[str, GateDefinition] = {
     ),
     "G-04": GateDefinition(
         gate_id="G-04",
-        question="국내 단일종목 레버리지 상품의 실제 종목 목록, PCF·AUM/NAV 공개시각, 복제방식",
-        default_action_if_unresolved="동적 발견·공개시각·구조 불명확 상품을 H1에서 제외",
+        question=(
+            "무료 KRX 일별 API로 선택된 국내 단일종목 레버리지 H1 universe의 "
+            "목표배율·listed-notional 규모 proxy·데이터 가용성·lineage 검증"
+        ),
+        default_action_if_unresolved=(
+            "무료 KRX 일별 universe·proxy·가용성·lineage가 불명확한 상품을 "
+            "H1 일별 축소모델에서 제외"
+        ),
     ),
     "G-05": GateDefinition(
         gate_id="G-05",

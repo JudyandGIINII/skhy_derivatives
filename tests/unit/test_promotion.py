@@ -95,3 +95,22 @@ def test_criteria_match_base_yaml_promotion_config() -> None:
     assert criteria.min_profit_factor == Decimal("1.2")
     assert criteria.max_strategy_mdd_pct == Decimal("5.0")
     assert criteria.max_single_day_profit_share == Decimal("0.3")
+
+
+def test_ineligible_daily_proxy_is_held_even_when_metrics_pass() -> None:
+    result = evaluate_promotion(
+        _passing_input(
+            model_version="h1_krx_daily_proxy_reduced_v1",
+            data_resolution="daily-proxy",
+            promotion_scope="h1-daily-proxy-research-only",
+            promotion_eligible=False,
+        ),
+        _criteria(),
+    )
+
+    assert result.verdict == PromotionVerdict.HOLD
+    assert "승격 비대상" in result.reasons[0]
+    assert result.model_version == "h1_krx_daily_proxy_reduced_v1"
+    assert result.data_resolution == "daily-proxy"
+    assert result.promotion_scope == "h1-daily-proxy-research-only"
+    assert result.promotion_eligible is False

@@ -13,10 +13,17 @@ from decimal import Decimal
 from skhy_research.domain.enums import SignalDirection
 from skhy_research.domain.reference import FundSnapshot
 from skhy_research.domain.strategy import Signal
-from skhy_research.features.h1_close_pressure.close_pressure import ClosePressureResult
+from skhy_research.features.h1_close_pressure.close_pressure import (
+    ORIGINAL_H1_PROMOTION_SCOPE,
+    ClosePressureResult,
+)
 from skhy_research.strategies.h1_close_rebalance.lookahead_guard import assert_no_lookahead
 
 NO_SIGNAL_NEUTRAL_BAND = "close_pressure_within_neutral_band"
+
+
+class H1ModelScopeMismatchError(RuntimeError):
+    """feature의 promotion scope와 전략 scope가 달라 성과가 섞일 위험이 있을 때."""
 
 
 @dataclass(frozen=True)
@@ -29,9 +36,16 @@ class H1Decision:
 class H1CloseRebalanceStrategy:
     strategy_id = "h1_close_rebalance"
 
-    def __init__(self, strategy_version: str, neutral_band: Decimal) -> None:
+    def __init__(
+        self,
+        strategy_version: str,
+        neutral_band: Decimal,
+        *,
+        promotion_scope: str = ORIGINAL_H1_PROMOTION_SCOPE,
+    ) -> None:
         self.strategy_version = strategy_version
         self._neutral_band = neutral_band
+        self._promotion_scope = promotion_scope
 
     def decide(
         self,
@@ -45,11 +59,15 @@ class H1CloseRebalanceStrategy:
         signal_id: str,
         estimated_cost: Decimal,
     ) -> H1Decision:
+        self._assert_model_scope(close_pressure)
         assert_no_lookahead(fund_snapshots_used, decision_time_utc)
 
         explain: dict[str, object] = {
             "close_pressure_value": str(close_pressure.value),
             "model_version": close_pressure.model_version,
+            "data_resolution": close_pressure.data_resolution,
+            "promotion_scope": close_pressure.promotion_scope,
+            "promotion_eligible": close_pressure.promotion_eligible,
             "missing_flow_fund_ids": close_pressure.missing_flow_fund_ids,
             "neutral_band": str(self._neutral_band),
         }
@@ -77,3 +95,18 @@ class H1CloseRebalanceStrategy:
             input_record_ids=input_record_ids,
         )
         return H1Decision(signal=signal, no_signal_reason=None, explain=explain)
+
+    def _assert_model_scope(self, close_pressure: ClosePressureResult) -> None:
+        if close_pressure.promotion_scope != self._promotion_scope:
+            raise H1ModelScopeMismatchError(
+                "close pressure와 strategy의 promotion scope가 다름: "
+                f"feature={close_pressure.promotion_scope}, strategy={self._promotion_scope}"
+            )
+        if (
+            not close_pressure.promotion_eligible
+            and self.strategy_version != close_pressure.model_version
+        ):
+            raise H1ModelScopeMismatchError(
+                "승격 비대상 축소모델은 strategy_version을 model_version과 같게 분리해야 함: "
+                f"strategy={self.strategy_version}, model={close_pressure.model_version}"
+            )

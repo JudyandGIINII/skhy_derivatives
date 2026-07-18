@@ -15,7 +15,7 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from skhy_research.domain.enums import PromotionVerdict
 
@@ -91,6 +91,19 @@ class ExperimentResult(BaseModel):
     verdict: PromotionVerdict
     verdict_reason: str
     created_at_utc: int
+    model_version: str = "unspecified"
+    data_resolution: str = "unspecified"
+    promotion_scope: str = "strategy-default"
+    promotion_eligible: bool = True
+
+    @model_validator(mode="after")
+    def _ineligible_model_cannot_be_reported_as_pass(self) -> ExperimentResult:
+        if not self.promotion_eligible and self.verdict == PromotionVerdict.PASS:
+            raise ValueError(
+                "promotion_eligible=False인 모델은 PASS 결과로 기록할 수 없다: "
+                f"scope={self.promotion_scope}, model={self.model_version}"
+            )
+        return self
 
 
 def _git_output(repo_root: Path, *args: str) -> str:

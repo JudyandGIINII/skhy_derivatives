@@ -14,6 +14,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+ORIGINAL_H1_DATA_RESOLUTION = "intraday"
+ORIGINAL_H1_PROMOTION_SCOPE = "h1-original"
+
 
 @dataclass(frozen=True)
 class FundContribution:
@@ -26,8 +29,11 @@ class FundContribution:
 @dataclass(frozen=True)
 class ClosePressureResult:
     value: Decimal
-    model_version: str  # "full" | "reduced"
+    model_version: str  # "full" | "reduced" | 별도 축소모델 ID
     missing_flow_fund_ids: tuple[str, ...]
+    data_resolution: str = ORIGINAL_H1_DATA_RESOLUTION
+    promotion_scope: str = ORIGINAL_H1_PROMOTION_SCOPE
+    promotion_eligible: bool = True
 
 
 def estimated_close_pressure(

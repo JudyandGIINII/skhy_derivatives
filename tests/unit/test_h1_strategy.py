@@ -20,6 +20,7 @@ from skhy_research.strategies.h1_close_rebalance.lookahead_guard import Lookahea
 from skhy_research.strategies.h1_close_rebalance.strategy import (
     NO_SIGNAL_NEUTRAL_BAND,
     H1CloseRebalanceStrategy,
+    H1ModelScopeMismatchError,
 )
 
 _DECISION_TIME = 1_800_000_000_000_000_000
@@ -158,3 +159,62 @@ def test_explain_dict_includes_model_version_and_missing_funds() -> None:
     )
     assert decision.explain["model_version"] == "reduced"
     assert decision.explain["missing_flow_fund_ids"] == ("FUND_X",)
+
+
+def test_daily_proxy_cannot_enter_original_h1_scope() -> None:
+    daily_proxy = ClosePressureResult(
+        Decimal("0.004"),
+        "h1_krx_daily_proxy_reduced_v1",
+        ("FUND_X",),
+        data_resolution="daily-proxy",
+        promotion_scope="h1-daily-proxy-research-only",
+        promotion_eligible=False,
+    )
+    with pytest.raises(H1ModelScopeMismatchError, match="promotion scope"):
+        _strategy().decide(
+            instrument_id="000660",
+            feature_set_id="h1_krx_daily_proxy_reduced_v1",
+            close_pressure=daily_proxy,
+            input_record_ids=["raw-1"],
+            fund_snapshots_used=[],
+            decision_time_utc=_DECISION_TIME,
+            expires_at_utc=_EXPIRES,
+            signal_id="sig-proxy-blocked",
+            estimated_cost=Decimal("0.001"),
+        )
+
+
+def test_daily_proxy_uses_separate_strategy_version_and_explain_tags() -> None:
+    model_version = "h1_krx_daily_proxy_reduced_v1"
+    promotion_scope = "h1-daily-proxy-research-only"
+    strategy = H1CloseRebalanceStrategy(
+        strategy_version=model_version,
+        neutral_band=Decimal("0.001"),
+        promotion_scope=promotion_scope,
+    )
+    daily_proxy = ClosePressureResult(
+        Decimal("0.004"),
+        model_version,
+        ("FUND_X",),
+        data_resolution="daily-proxy",
+        promotion_scope=promotion_scope,
+        promotion_eligible=False,
+    )
+
+    decision = strategy.decide(
+        instrument_id="000660",
+        feature_set_id=model_version,
+        close_pressure=daily_proxy,
+        input_record_ids=["raw-1"],
+        fund_snapshots_used=[],
+        decision_time_utc=_DECISION_TIME,
+        expires_at_utc=_EXPIRES,
+        signal_id="sig-proxy",
+        estimated_cost=Decimal("0.001"),
+    )
+
+    assert decision.signal is not None
+    assert decision.signal.strategy_version == model_version
+    assert decision.explain["data_resolution"] == "daily-proxy"
+    assert decision.explain["promotion_scope"] == promotion_scope
+    assert decision.explain["promotion_eligible"] is False

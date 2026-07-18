@@ -201,3 +201,23 @@ def test_experiment_result_valid_construction() -> None:
         created_at_utc=_NOW,
     )
     assert result.verdict == PromotionVerdict.PASS
+
+
+def test_experiment_result_rejects_pass_for_promotion_ineligible_proxy() -> None:
+    with pytest.raises(ValidationError, match="PASS"):
+        ExperimentResult(
+            experiment_id="exp-proxy",
+            run_id="run-proxy",
+            strategy_id="h1_close_rebalance",
+            strategy_version="h1_krx_daily_proxy_reduced_v1",
+            data_snapshot_id="snap-proxy",
+            split_name="test",
+            cost_scenario="base",
+            verdict=PromotionVerdict.PASS,
+            verdict_reason="proxy 성과를 원 H1 PASS로 오기록",
+            created_at_utc=_NOW,
+            model_version="h1_krx_daily_proxy_reduced_v1",
+            data_resolution="daily-proxy",
+            promotion_scope="h1-daily-proxy-research-only",
+            promotion_eligible=False,
+        )
