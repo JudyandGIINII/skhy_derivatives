@@ -46,6 +46,7 @@ def _catalog(capabilities: frozenset[ProviderCapability]) -> ProviderCatalogEntr
     return ProviderCatalogEntry(
         provider_name="test_provider",
         port_type="historical_data",
+        catalog_version="test-provider-historical-data-contract-v1",
         capabilities=capabilities,
         license_terms_url="https://example.com/tos",
         storage_redistribution_allowed=False,

@@ -264,6 +264,7 @@ class _ProbeDouble:
         return ProviderCatalogEntry(
             provider_name="probe-double",
             port_type="reference_data",
+            catalog_version="probe-double-reference-data-test-v1",
             capabilities=frozenset({ProviderCapability.INSTRUMENT_LOOKUP}),
             license_terms_url="https://example.test/terms",
             storage_redistribution_allowed=False,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from skhy_research.domain.market import EpochNanos
 
@@ -40,23 +40,40 @@ class HealthStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class ProviderLicenseTerms(BaseModel):
+    """raw 수집 시점에 동결해 보존할 공급자 이용조건 snapshot."""
+
+    model_config = ConfigDict(frozen=True)
+
+    license_terms_url: str = Field(min_length=1)
+    storage_redistribution_allowed: bool
+
+
 class ProviderCatalogEntry(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider_name: str
     port_type: str  # market_data|reference_data|historical_data|broker
+    catalog_version: str = Field(min_length=1)
     capabilities: frozenset[ProviderCapability]
     call_rate_limit_per_min: int | None = None
     subscription_limit: int | None = None
     expected_latency_ms: float | None = None
     measured_latency_ms: float | None = None
-    license_terms_url: str
+    license_terms_url: str = Field(min_length=1)
     storage_redistribution_allowed: bool
     last_verified_at_utc: EpochNanos
     health_status: HealthStatus = HealthStatus.UNKNOWN
 
     def supports(self, capability: ProviderCapability) -> bool:
         return capability in self.capabilities
+
+    def license_terms_snapshot(self) -> ProviderLicenseTerms:
+        """현재 catalog에 확인된 이용조건을 raw 계보용 불변 값으로 복사한다."""
+        return ProviderLicenseTerms(
+            license_terms_url=self.license_terms_url,
+            storage_redistribution_allowed=self.storage_redistribution_allowed,
+        )
 
 
 class ConnectionHealth(BaseModel):

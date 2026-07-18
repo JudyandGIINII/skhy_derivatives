@@ -53,6 +53,7 @@ class KrxReadOnlyClient:
         return ProviderCatalogEntry(
             provider_name=_PROVIDER_NAME,
             port_type="historical_data",
+            catalog_version="krx-historical-data-v1",
             capabilities=frozenset({ProviderCapability.HISTORICAL_BARS}),
             license_terms_url="https://openapi.krx.co.kr/contents/OPP/INFO/service/OPPINFO004.cmd",
             storage_redistribution_allowed=False,

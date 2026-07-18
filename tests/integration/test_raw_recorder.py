@@ -16,12 +16,26 @@ from skhy_research.adapters.persistence.raw_recorder import (
     RawRecorder,
     compute_dedupe_key,
 )
+from skhy_research.domain.provider_capability import HealthStatus, ProviderCatalogEntry
 
 _NOW = time.time_ns()
 
 
 def _recorder(clean_pg, tmp_path: Path) -> RawRecorder:
     return RawRecorder(clean_pg, tmp_path)
+
+
+def _catalog(provider_name: str = "krx") -> ProviderCatalogEntry:
+    return ProviderCatalogEntry(
+        provider_name=provider_name,
+        port_type="historical_data",
+        catalog_version=f"{provider_name}-historical-data-test-v1",
+        capabilities=frozenset(),
+        license_terms_url="https://example.com/provider-terms",
+        storage_redistribution_allowed=False,
+        last_verified_at_utc=_NOW,
+        health_status=HealthStatus.HEALTHY,
+    )
 
 
 @pytest.mark.integration
@@ -37,6 +51,7 @@ def test_store_new_record_creates_file_and_catalog_row(clean_pg, tmp_path: Path)
         received_at_utc=_NOW,
         collection_run_id="run-1",
         dedupe_key=dedupe_key,
+        provider_catalog=_catalog(),
     )
 
     assert outcome.was_duplicate is False
@@ -47,6 +62,28 @@ def test_store_new_record_creates_file_and_catalog_row(clean_pg, tmp_path: Path)
         assert fh.read() == payload
     assert "krx" in str(stored_path)
     assert "daily_ohlcv" in str(stored_path)
+    assert outcome.meta.provider_catalog_version == "krx-historical-data-test-v1"
+    assert outcome.meta.license_terms.license_terms_url == "https://example.com/provider-terms"
+    assert outcome.meta.license_terms.storage_redistribution_allowed is False
+    assert recorder.get_meta(outcome.meta.raw_record_id) == outcome.meta
+
+
+@pytest.mark.integration
+def test_store_rejects_catalog_for_different_provider(clean_pg, tmp_path: Path) -> None:
+    recorder = _recorder(clean_pg, tmp_path)
+
+    with pytest.raises(ValueError, match="provider_name"):
+        recorder.store(
+            source="krx",
+            dataset="daily_ohlcv",
+            payload=b"{}",
+            received_at_utc=_NOW,
+            collection_run_id="run-mismatch",
+            dedupe_key="dedupe-mismatch",
+            provider_catalog=_catalog("kis"),
+        )
+
+    assert list(tmp_path.rglob("*.json.gz")) == []
 
 
 @pytest.mark.integration
@@ -62,6 +99,7 @@ def test_reingesting_identical_payload_is_idempotent(clean_pg, tmp_path: Path) -
         received_at_utc=_NOW,
         collection_run_id="run-1",
         dedupe_key=dedupe_key,
+        provider_catalog=_catalog(),
     )
     second = recorder.store(
         source="krx",
@@ -70,6 +108,7 @@ def test_reingesting_identical_payload_is_idempotent(clean_pg, tmp_path: Path) -
         received_at_utc=_NOW,
         collection_run_id="run-2",  # 재시작 후 다른 run_id로 재수집을 시도해도
         dedupe_key=dedupe_key,
+        provider_catalog=_catalog(),
     )
 
     assert second.was_duplicate is True
@@ -93,6 +132,7 @@ def test_conflicting_payload_with_same_dedupe_key_keeps_canonical_record(
         received_at_utc=_NOW,
         collection_run_id="run-1",
         dedupe_key=dedupe_key,
+        provider_catalog=_catalog(),
     )
     conflicting = recorder.store(
         source="krx",
@@ -101,6 +141,7 @@ def test_conflicting_payload_with_same_dedupe_key_keeps_canonical_record(
         received_at_utc=_NOW,
         collection_run_id="run-1",
         dedupe_key=dedupe_key,
+        provider_catalog=_catalog(),
     )
 
     assert conflicting.was_conflict is True
@@ -128,6 +169,7 @@ def test_concurrent_identical_store_keeps_one_catalog_row_and_file(clean_pg, tmp
             received_at_utc=_NOW,
             collection_run_id=f"run-{index}",
             dedupe_key=dedupe_key,
+            provider_catalog=_catalog(),
         )
 
     with ThreadPoolExecutor(max_workers=8) as executor:
@@ -157,6 +199,7 @@ def test_database_insert_failure_removes_candidate_file(
             received_at_utc=_NOW,
             collection_run_id="run-fail",
             dedupe_key="dedupe-fail",
+            provider_catalog=_catalog(),
         )
 
     assert list(tmp_path.rglob("*.json.gz")) == []
@@ -169,6 +212,10 @@ def test_raw_catalog_has_database_dedupe_constraint(clean_pg) -> None:
         item for item in constraints if item["name"] == "uq_raw_record_source_dataset_dedupe"
     )
     assert matching["column_names"] == ["source", "dataset", "dedupe_key"]
+
+    columns = {column["name"]: column for column in inspect(clean_pg).get_columns("raw_record_catalog")}
+    assert columns["license_terms"]["nullable"] is False
+    assert columns["provider_catalog_version"]["nullable"] is False
 
 
 @pytest.mark.integration
@@ -183,6 +230,7 @@ def test_tampered_file_is_detected_as_corruption_on_reingest(clean_pg, tmp_path:
         received_at_utc=_NOW,
         collection_run_id="run-1",
         dedupe_key=dedupe_key,
+        provider_catalog=_catalog(),
     )
 
     # 저장된 원시 파일을 직접 손상시킨다 (디스크 오류·수동 편집 등을 시뮬레이션)
@@ -198,6 +246,7 @@ def test_tampered_file_is_detected_as_corruption_on_reingest(clean_pg, tmp_path:
             received_at_utc=_NOW,
             collection_run_id="run-2",
             dedupe_key=dedupe_key,
+            provider_catalog=_catalog(),
         )
 
 

@@ -63,6 +63,7 @@ def _catalog(name: str) -> ProviderCatalogEntry:
     return ProviderCatalogEntry(
         provider_name=name,
         port_type="historical_data",
+        catalog_version=f"{name}-historical-data-test-v1",
         capabilities=frozenset({ProviderCapability.HISTORICAL_BARS}),
         license_terms_url="https://example.com/tos",
         storage_redistribution_allowed=False,

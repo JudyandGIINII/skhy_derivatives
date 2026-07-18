@@ -21,6 +21,7 @@ from sqlalchemy import Engine, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from skhy_research.adapters.persistence.schema import ingestion_checkpoint, raw_record_catalog
+from skhy_research.domain.provider_capability import ProviderCatalogEntry
 from skhy_research.domain.raw_record import RawRecordMeta
 
 
@@ -60,8 +61,14 @@ class RawRecorder:
         received_at_utc: int,
         collection_run_id: str,
         dedupe_key: str,
+        provider_catalog: ProviderCatalogEntry,
         provider_sequence: str | None = None,
     ) -> RawStoreOutcome:
+        if provider_catalog.provider_name != source:
+            raise ValueError(
+                "raw source와 provider catalog의 provider_name이 일치해야 한다: "
+                f"source={source}, provider_name={provider_catalog.provider_name}"
+            )
         checksum = compute_checksum(payload)
         raw_record_id = str(uuid.uuid4())
         storage_path = self._partition_path(source, dataset, received_at_utc, raw_record_id)
@@ -73,6 +80,8 @@ class RawRecorder:
             payload_checksum=checksum,
             received_at_utc=received_at_utc,
             collection_run_id=collection_run_id,
+            license_terms=provider_catalog.license_terms_snapshot(),
+            provider_catalog_version=provider_catalog.catalog_version,
             provider_sequence=provider_sequence,
             storage_path=str(storage_path),
             conflict_with=None,
@@ -135,6 +144,8 @@ class RawRecorder:
                 payload_checksum=candidate.payload_checksum,
                 received_at_utc=candidate.received_at_utc,
                 collection_run_id=candidate.collection_run_id,
+                license_terms=candidate.license_terms.model_dump(mode="json"),
+                provider_catalog_version=candidate.provider_catalog_version,
                 provider_sequence=candidate.provider_sequence,
                 storage_path=candidate.storage_path,
                 conflict_with=candidate.conflict_with,
@@ -149,6 +160,16 @@ class RawRecorder:
             .returning(raw_record_catalog.c.raw_record_id)
         )
         return conn.execute(statement).scalar_one_or_none() is not None
+
+    def get_meta(self, raw_record_id: str) -> RawRecordMeta | None:
+        """lineage의 raw parent ID로 수집·checksum·이용조건 metadata를 역조회한다."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(raw_record_catalog).where(
+                    raw_record_catalog.c.raw_record_id == raw_record_id
+                )
+            ).mappings().one_or_none()
+        return RawRecordMeta(**dict(row)) if row is not None else None
 
     def _partition_path(
         self, source: str, dataset: str, received_at_utc: int, raw_record_id: str

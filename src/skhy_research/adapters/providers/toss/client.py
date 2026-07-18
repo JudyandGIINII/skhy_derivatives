@@ -52,6 +52,7 @@ class TossReadOnlyClient:
         return ProviderCatalogEntry(
             provider_name=_PROVIDER_NAME,
             port_type="reference_data",
+            catalog_version="toss-reference-data-v1",
             capabilities=frozenset({ProviderCapability.INSTRUMENT_LOOKUP}),
             license_terms_url="https://openapi.tossinvest.com/openapi-docs/overview.md",
             storage_redistribution_allowed=False,

@@ -78,6 +78,8 @@ raw_record_catalog = Table(
     Column("payload_checksum", String, nullable=False),
     Column("received_at_utc", BigInteger, nullable=False),
     Column("collection_run_id", String, nullable=False),
+    Column("license_terms", JSON, nullable=False),
+    Column("provider_catalog_version", String, nullable=False),
     Column("provider_sequence", String, nullable=True),
     Column("storage_path", String, nullable=False),
     Column("conflict_with", String, nullable=True),
@@ -87,6 +89,15 @@ raw_record_catalog = Table(
         "dedupe_key",
         name="uq_raw_record_source_dataset_dedupe",
     ),
+)
+
+normalized_record_catalog = Table(
+    "normalized_record_catalog",
+    metadata,
+    Column("normalized_record_id", String, primary_key=True),
+    Column("record_type", String, nullable=False),
+    Column("payload", JSON, nullable=False),
+    Column("created_at_utc", BigInteger, nullable=False),
 )
 
 ingestion_checkpoint = Table(

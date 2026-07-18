@@ -28,6 +28,7 @@ def _catalog_entry(name: str, port_type: str, capabilities: frozenset[ProviderCa
     return ProviderCatalogEntry(
         provider_name=name,
         port_type=port_type,
+        catalog_version=f"{name}-{port_type}-test-v1",
         capabilities=capabilities,
         license_terms_url="https://example.com/tos",
         storage_redistribution_allowed=False,

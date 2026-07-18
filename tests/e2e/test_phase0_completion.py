@@ -21,6 +21,10 @@ from skhy_research.adapters.persistence.manifest_store import (
     add_lineage_edge,
     trace_lineage_for_record,
 )
+from skhy_research.adapters.persistence.normalized_record_store import (
+    get_normalized_record,
+    save_normalized_record,
+)
 from skhy_research.adapters.persistence.raw_recorder import RawRecorder, compute_dedupe_key
 from skhy_research.adapters.providers.fixture_registry import build_fixture_provider_registry
 from skhy_research.application.capability_probe import run_capability_probe
@@ -31,6 +35,7 @@ from skhy_research.application.provider_registry import (
 )
 from skhy_research.data.normalization.market_quote_normalizer import normalize_market_quote
 from skhy_research.domain.experiment import LineageEdge
+from skhy_research.domain.market import MarketQuote
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SRC_ROOT = _REPO_ROOT / "src" / "skhy_research"
@@ -39,8 +44,10 @@ _NOW = time.time_ns()
 
 @pytest.mark.integration
 def test_raw_record_is_traceable_to_normalized_record(clean_pg, tmp_path: Path) -> None:
-    """"원시 레코드 하나에서 source, 수신시각, checksum, 정규화 레코드까지 추적된다"를 실증한다."""
+    """raw에서 이용조건과 실제 normalized DB 레코드까지 양방향 추적됨을 실증한다."""
     recorder = RawRecorder(clean_pg, tmp_path)
+    provider_registry = build_fixture_provider_registry()
+    provider_catalog = provider_registry.get_market_data("kis").capabilities()
     raw_row = {
         "source": "kis",
         "venue": "KRX",
@@ -67,11 +74,12 @@ def test_raw_record_is_traceable_to_normalized_record(clean_pg, tmp_path: Path) 
         received_at_utc=_NOW,
         collection_run_id="phase0-e2e",
         dedupe_key=dedupe_key,
+        provider_catalog=provider_catalog,
     )
 
     # 정규화: raw payload -> MarketQuote. bid_price/ask_price는 문자열이지만 Decimal로 검증된다.
     normalized = normalize_market_quote("kis", "quotes", raw_row, raw_record_id=stored.meta.raw_record_id)
-    normalized_record_id = str(uuid.uuid4())
+    normalized_record = save_normalized_record(clean_pg, normalized, created_at_utc=_NOW)
 
     add_lineage_edge(
         clean_pg,
@@ -80,24 +88,35 @@ def test_raw_record_is_traceable_to_normalized_record(clean_pg, tmp_path: Path) 
             run_id="phase0-e2e",
             parent_record_id=stored.meta.raw_record_id,
             parent_layer="raw",
-            child_record_id=normalized_record_id,
+            child_record_id=normalized_record.normalized_record_id,
             child_layer="normalized",
             algorithm_version="market_quote_normalizer@1.0.0",
             created_at_utc=_NOW,
         ),
     )
 
-    # raw 레코드 자체에서 source·수신시각·checksum을 확인
-    assert stored.meta.source == "kis"
-    assert stored.meta.received_at_utc == _NOW
-    assert stored.meta.payload_checksum  # sha256이 비어있지 않음
-
-    # 정규화 레코드에서 raw까지 역추적
-    edges = trace_lineage_for_record(clean_pg, "phase0-e2e", normalized_record_id)
+    # 실제 normalized DB 레코드 ID에서 lineage parent를 찾고 raw catalog까지 역조회한다.
+    loaded_normalized = get_normalized_record(clean_pg, normalized_record.normalized_record_id)
+    assert loaded_normalized is not None
+    persisted_quote = MarketQuote.model_validate(loaded_normalized.payload)
+    edges = trace_lineage_for_record(
+        clean_pg, "phase0-e2e", loaded_normalized.normalized_record_id
+    )
     assert len(edges) == 1
-    assert edges[0].parent_record_id == stored.meta.raw_record_id
     assert edges[0].parent_layer == "raw"
-    assert normalized.instrument_id == "SKHY_000660_KRX_COMMON"
+    traced_raw = recorder.get_meta(edges[0].parent_record_id)
+    assert traced_raw is not None
+
+    assert persisted_quote.instrument_id == "SKHY_000660_KRX_COMMON"
+    assert traced_raw.source == "kis"
+    assert traced_raw.received_at_utc == _NOW
+    assert traced_raw.payload_checksum == stored.meta.payload_checksum
+    assert traced_raw.license_terms.license_terms_url == provider_catalog.license_terms_url
+    assert (
+        traced_raw.license_terms.storage_redistribution_allowed
+        == provider_catalog.storage_redistribution_allowed
+    )
+    assert traced_raw.provider_catalog_version == provider_catalog.catalog_version
 
 
 def test_fixture_registry_capability_probe_and_health_recording_succeed() -> None:

@@ -23,6 +23,7 @@ from skhy_research.adapters.persistence.raw_recorder import RawRecorder, compute
 from skhy_research.domain.calendar import local_datetime_to_utc_nanos
 from skhy_research.domain.enums import Venue
 from skhy_research.domain.experiment import LineageEdge
+from skhy_research.domain.provider_capability import HealthStatus, ProviderCatalogEntry
 from skhy_research.domain.reference import FundSnapshot
 from skhy_research.features.h1_close_pressure.close_pressure import ClosePressureResult
 from skhy_research.strategies.h1_close_rebalance.decision_window import build_decision_window
@@ -30,6 +31,19 @@ from skhy_research.strategies.h1_close_rebalance.lookahead_guard import Lookahea
 from skhy_research.strategies.h1_close_rebalance.strategy import H1CloseRebalanceStrategy
 
 _TRADING_DATE = date(2026, 3, 10)  # 임의의 화요일 근처 평일
+
+
+def _hkex_catalog(verified_at_utc: int) -> ProviderCatalogEntry:
+    return ProviderCatalogEntry(
+        provider_name="hkex_issuer",
+        port_type="reference_data",
+        catalog_version="hkex-issuer-reference-data-v1",
+        capabilities=frozenset(),
+        license_terms_url="https://www.hkex.com.hk/Services/Rules-and-Forms-and-Fees",
+        storage_redistribution_allowed=False,
+        last_verified_at_utc=verified_at_utc,
+        health_status=HealthStatus.HEALTHY,
+    )
 
 
 def _snapshot_payload(published_at: int) -> dict:
@@ -73,6 +87,7 @@ def test_signal_lineage_traces_back_to_raw_when_no_lookahead(clean_pg, tmp_path:
         received_at_utc=published_previous_day_utc,
         collection_run_id="p1-09-audit",
         dedupe_key=dedupe_key,
+        provider_catalog=_hkex_catalog(published_previous_day_utc),
     )
     fund_snapshot = FundSnapshot(**payload)
 

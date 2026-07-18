@@ -58,6 +58,7 @@ class KisReadOnlyClient:
         return ProviderCatalogEntry(
             provider_name=_PROVIDER_NAME,
             port_type="market_data",
+            catalog_version="kis-market-data-v1",
             capabilities=frozenset({ProviderCapability.QUOTE_SNAPSHOT}),
             license_terms_url="https://apiportal.koreainvestment.com/intro",
             storage_redistribution_allowed=False,

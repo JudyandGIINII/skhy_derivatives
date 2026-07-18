@@ -9,9 +9,10 @@ PostgreSQL catalog에 남긴다. `(source, dataset, dedupe_key)`는 단일 canon
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from skhy_research.domain.market import EpochNanos
+from skhy_research.domain.provider_capability import ProviderLicenseTerms
 
 
 class RawRecordMeta(BaseModel):
@@ -24,6 +25,8 @@ class RawRecordMeta(BaseModel):
     payload_checksum: str  # sha256 hex
     received_at_utc: EpochNanos
     collection_run_id: str
+    license_terms: ProviderLicenseTerms
+    provider_catalog_version: str = Field(min_length=1)
     provider_sequence: str | None = None
     storage_path: str
     conflict_with: str | None = None

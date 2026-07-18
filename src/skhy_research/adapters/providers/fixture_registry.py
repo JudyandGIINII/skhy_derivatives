@@ -36,6 +36,7 @@ def _catalog(
     return ProviderCatalogEntry(
         provider_name=name,
         port_type=port_type,
+        catalog_version=f"{name}-{port_type}-fixture-v1",
         capabilities=capabilities,
         license_terms_url=license_url,
         storage_redistribution_allowed=False,

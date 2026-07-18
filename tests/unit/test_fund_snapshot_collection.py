@@ -18,6 +18,7 @@ def _catalog(capabilities: frozenset[ProviderCapability]) -> ProviderCatalogEntr
     return ProviderCatalogEntry(
         provider_name="hkex_issuer",
         port_type="reference_data",
+        catalog_version="hkex-issuer-reference-data-test-v1",
         capabilities=capabilities,
         license_terms_url="https://example.com/tos",
         storage_redistribution_allowed=False,
