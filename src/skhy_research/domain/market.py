@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
@@ -15,6 +16,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validat
 from skhy_research.domain.enums import (
     AdjustmentStatus,
     Currency,
+    MarketDataFeedMode,
     OrderSide,
     QualityFlag,
     Session,
@@ -83,6 +85,65 @@ class MarketQuote(RecordEnvelope):
     # bid > ask(crossed quote)는 구조적 오류가 아니라 데이터 품질 이벤트다.
     # 이 타입은 값을 거부하지 않고 그대로 보존하며, 탐지·QualityFlag 부여는
     # P0-09 정규화·품질 파이프라인의 책임이다.
+
+
+class ObservationTimeSource(StrEnum):
+    PROVIDER_DATE_TIME = "PROVIDER_DATE_TIME"
+    PROVIDER_TIME_WITH_BATCH_DATE = "PROVIDER_TIME_WITH_BATCH_DATE"
+    PROVIDER_TIMESTAMP = "PROVIDER_TIMESTAMP"
+
+
+class PublicationTimeSource(StrEnum):
+    CLIENT_RECEIVED_AT = "CLIENT_RECEIVED_AT"
+
+
+class IndicativeValueKind(StrEnum):
+    NAV = "NAV"
+    IV = "IV"
+
+
+class MarketPriceSnapshot(RecordEnvelope):
+    """특정 시점에 REST로 조회한 최종가 스냅샷.
+
+    `MarketQuote`는 양방향 호가를 요구하므로, 현재가만 제공하는 KIS/Toss
+    endpoint에 없는 bid/ask를 만들지 않기 위해 별도 계약으로 보존한다.
+    `event_time_utc`는 공급자가 제공한 관측시각이고, `published_time_utc`는
+    신호 생성자가 값을 이용할 수 있게 된 시각이다.
+    """
+
+    record_id: str = Field(min_length=1)
+    instrument_id: str = Field(min_length=1)
+    last_price: NonNegativeDecimal
+    last_size: NonNegativeDecimal | None = None
+    published_time_utc: EpochNanos
+    observation_time_source: ObservationTimeSource
+    publication_time_source: PublicationTimeSource
+    feed_mode: MarketDataFeedMode
+    indicative_value: NonNegativeDecimal | None = None
+    indicative_value_kind: IndicativeValueKind | None = None
+    indicative_value_observed_at_utc: EpochNanos | None = None
+
+    @model_validator(mode="after")
+    def _publication_is_lookahead_safe(self) -> MarketPriceSnapshot:
+        if not (self.event_time_utc <= self.published_time_utc <= self.received_time_utc):
+            raise ValueError(
+                "event_time_utc <= published_time_utc <= received_time_utc여야 한다"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _indicative_value_has_kind_and_time(self) -> MarketPriceSnapshot:
+        metadata = (self.indicative_value_kind, self.indicative_value_observed_at_utc)
+        if self.indicative_value is None and any(value is not None for value in metadata):
+            raise ValueError("indicative_value가 없으면 종류·관측시각도 없어야 한다")
+        if self.indicative_value is not None and any(value is None for value in metadata):
+            raise ValueError("indicative_value가 있으면 종류·관측시각이 필요하다")
+        if (
+            self.indicative_value_observed_at_utc is not None
+            and self.indicative_value_observed_at_utc > self.published_time_utc
+        ):
+            raise ValueError("indicative value 관측시각은 게시·수신시각보다 늦을 수 없다")
+        return self
 
 
 class Trade(RecordEnvelope):

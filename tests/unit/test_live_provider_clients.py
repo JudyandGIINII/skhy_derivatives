@@ -232,6 +232,69 @@ def test_kis_provider_error_exposes_code_not_response_message() -> None:
     assert "sensitive upstream detail" not in str(exc_info.value)
 
 
+def test_kis_live_snapshot_support_uses_only_read_only_price_and_nav_endpoints() -> None:
+    secrets = _RecordingSecrets(
+        {"KIS_APP_KEY": "kis-app-key", "KIS_APP_SECRET": "kis-app-secret"}
+    )
+    observed_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "test-token", "expires_in": 3600})
+        observed_paths.append(request.url.path)
+        assert request.method == "GET"
+        assert request.headers["authorization"] == "Bearer test-token"
+        assert "order" not in request.url.path
+        if request.url.path.endswith("inquire-time-itemchartprice"):
+            assert request.headers["tr_id"] == "FHKST03010200"
+            assert request.url.params["FID_INPUT_HOUR_1"] == "151000"
+            return httpx.Response(
+                200,
+                json={
+                    "rt_cd": "0",
+                    "output2": [
+                        {
+                            "stck_bsop_date": "20260716",
+                            "stck_cntg_hour": "151000",
+                            "stck_prpr": "1836000",
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("etfetn/v1/quotations/inquire-price"):
+            assert request.headers["tr_id"] == "FHPST02400000"
+            return httpx.Response(
+                200,
+                json={"rt_cd": "0", "output": {"stck_prpr": "14585", "nav": "14497.91"}},
+            )
+        assert request.url.path.endswith("nav-comparison-time-trend")
+        assert request.headers["tr_id"] == "FHPST02440100"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output": [{"bsop_hour": "151000", "stck_prpr": "14585", "nav": "14468.37"}],
+            },
+        )
+
+    client = KisReadOnlyClient(
+        secrets,
+        http_client=_http_client(handler),
+        min_request_interval_seconds=0,
+    )
+
+    assert client.fetch_intraday_prices("000660", as_of_time_kst="151000")[0][
+        "stck_cntg_hour"
+    ] == "151000"
+    assert client.fetch_etf_etn_quote("0193T0")["nav"] == "14497.91"
+    assert client.fetch_etf_nav_intraday("0193T0")[0]["nav"] == "14468.37"
+    assert observed_paths == [
+        "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice",
+        "/uapi/etfetn/v1/quotations/inquire-price",
+        "/uapi/etfetn/v1/quotations/nav-comparison-time-trend",
+    ]
+
+
 def test_toss_uses_form_oauth_then_stock_lookup_without_account_header() -> None:
     secrets = _RecordingSecrets(
         {"TOSS_CLIENT_ID": "toss-client", "TOSS_CLIENT_SECRET": "toss-secret"}
@@ -265,6 +328,59 @@ def test_toss_uses_form_oauth_then_stock_lookup_without_account_header() -> None
     assert first == second
     assert calls == {"token": 1, "stocks": 2}
     assert client.capabilities().supports(ProviderCapability.INSTRUMENT_LOOKUP)
+
+
+def test_toss_price_and_orderbook_have_provider_timestamps_without_account_header() -> None:
+    secrets = _RecordingSecrets(
+        {"TOSS_CLIENT_ID": "toss-client", "TOSS_CLIENT_SECRET": "toss-secret"}
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/token":
+            return httpx.Response(200, json={"access_token": "toss-token", "expires_in": 3600})
+        assert request.method == "GET"
+        assert "X-Tossinvest-Account" not in request.headers
+        if request.url.path == "/api/v1/prices":
+            assert request.url.params["symbols"] == "000660,005930"
+            return httpx.Response(
+                200,
+                json={
+                    "result": [
+                        {
+                            "symbol": "000660",
+                            "timestamp": "2026-07-16T15:10:00.100+09:00",
+                            "lastPrice": "1835000",
+                            "currency": "KRW",
+                        }
+                    ]
+                },
+            )
+        assert request.url.path == "/api/v1/orderbook"
+        assert request.url.params["symbol"] == "000660"
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "timestamp": "2026-07-16T15:10:00.200+09:00",
+                    "currency": "KRW",
+                    "asks": [{"price": "1836000", "volume": "10"}],
+                    "bids": [{"price": "1835000", "volume": "20"}],
+                }
+            },
+        )
+
+    client = TossReadOnlyClient(
+        secrets,
+        http_client=_http_client(handler),
+        base_url="https://toss.test",
+    )
+
+    prices = client.fetch_prices(["000660", "005930"])
+    orderbook = client.fetch_orderbook("000660")
+
+    assert prices[0]["timestamp"] == "2026-07-16T15:10:00.100+09:00"
+    assert orderbook["timestamp"] == "2026-07-16T15:10:00.200+09:00"
+    assert client.capabilities().supports(ProviderCapability.QUOTE_SNAPSHOT)
 
 
 @pytest.mark.parametrize(

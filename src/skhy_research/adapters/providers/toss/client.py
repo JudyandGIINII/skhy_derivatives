@@ -23,6 +23,8 @@ _PROVIDER_NAME = "toss"
 _DEFAULT_BASE_URL = "https://openapi.tossinvest.com"
 _TOKEN_PATH = "/oauth2/token"
 _STOCKS_PATH = "/api/v1/stocks"
+_PRICES_PATH = "/api/v1/prices"
+_ORDERBOOK_PATH = "/api/v1/orderbook"
 _SYMBOL = re.compile(r"^[A-Za-z0-9.\-]+$")
 
 
@@ -51,9 +53,11 @@ class TossReadOnlyClient:
     def capabilities(self) -> ProviderCatalogEntry:
         return ProviderCatalogEntry(
             provider_name=_PROVIDER_NAME,
-            port_type="reference_data",
-            catalog_version="toss-reference-data-v1",
-            capabilities=frozenset({ProviderCapability.INSTRUMENT_LOOKUP}),
+            port_type="market_data",
+            catalog_version="toss-market-data-v2",
+            capabilities=frozenset(
+                {ProviderCapability.INSTRUMENT_LOOKUP, ProviderCapability.QUOTE_SNAPSHOT}
+            ),
             license_terms_url="https://openapi.tossinvest.com/openapi-docs/overview.md",
             storage_redistribution_allowed=False,
             last_verified_at_utc=time.time_ns(),
@@ -61,8 +65,7 @@ class TossReadOnlyClient:
         )
 
     def fetch_stock_info(self, symbols: list[str]) -> list[dict[str, Any]]:
-        if not symbols or len(symbols) > 200 or any(not _SYMBOL.fullmatch(item) for item in symbols):
-            raise ValueError("symbols는 1~200개의 영문·숫자·점·하이픈만 허용한다")
+        _validate_symbols(symbols)
         token = self._get_access_token()
         payload = request_json(
             _PROVIDER_NAME,
@@ -74,6 +77,26 @@ class TossReadOnlyClient:
         )
         result = payload.get("result")
         if not isinstance(result, list) or not all(isinstance(row, dict) for row in result):
+            raise ProviderResponseError(_PROVIDER_NAME, error_code="missing-result")
+        return result
+
+    def fetch_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """timestamp가 포함된 현재가를 최대 200종목까지 읽는다."""
+
+        _validate_symbols(symbols)
+        payload = self._authenticated_get(_PRICES_PATH, {"symbols": ",".join(symbols)})
+        result = payload.get("result")
+        if not isinstance(result, list) or not all(isinstance(row, dict) for row in result):
+            raise ProviderResponseError(_PROVIDER_NAME, error_code="missing-result")
+        return result
+
+    def fetch_orderbook(self, symbol: str) -> dict[str, Any]:
+        """MarketQuote 매핑용 최우선 매수·매도호가를 읽는다."""
+
+        _validate_symbols([symbol])
+        payload = self._authenticated_get(_ORDERBOOK_PATH, {"symbol": symbol})
+        result = payload.get("result")
+        if not isinstance(result, dict):
             raise ProviderResponseError(_PROVIDER_NAME, error_code="missing-result")
         return result
 
@@ -117,6 +140,17 @@ class TossReadOnlyClient:
         self._token_valid_until = now + max(1.0, expires_in - 60.0)
         return token
 
+    def _authenticated_get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
+        token = self._get_access_token()
+        return request_json(
+            _PROVIDER_NAME,
+            lambda: self._client.get(
+                f"{self._base_url}{path}",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                params=params,
+            ),
+        )
+
 
 def _positive_float(value: object, *, default: float) -> float:
     try:
@@ -124,3 +158,8 @@ def _positive_float(value: object, *, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return result if result > 0 else default
+
+
+def _validate_symbols(symbols: list[str]) -> None:
+    if not symbols or len(symbols) > 200 or any(not _SYMBOL.fullmatch(item) for item in symbols):
+        raise ValueError("symbols는 1~200개의 영문·숫자·점·하이픈만 허용한다")

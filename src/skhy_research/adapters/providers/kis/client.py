@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any, Literal
 
 import httpx
@@ -25,6 +26,9 @@ _BASE_URLS = {
 }
 _TOKEN_PATH = "/oauth2/tokenP"
 _QUOTE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
+_INTRADAY_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+_ETF_ETN_QUOTE_PATH = "/uapi/etfetn/v1/quotations/inquire-price"
+_ETF_NAV_INTRADAY_PATH = "/uapi/etfetn/v1/quotations/nav-comparison-time-trend"
 
 KisEnvironment = Literal["vps", "prod"]
 
@@ -40,15 +44,29 @@ class KisReadOnlyClient:
         base_url: str | None = None,
         http_client: httpx.Client | None = None,
         timeout_seconds: float = 15.0,
+        min_request_interval_seconds: float = 0.15,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if environment not in _BASE_URLS:
             raise ValueError("KIS environment는 'vps' 또는 'prod'여야 한다")
         self._secret_provider = secret_provider
+        self._environment: KisEnvironment = environment
         self._base_url = (base_url or _BASE_URLS[environment]).rstrip("/")
         self._client = http_client or httpx.Client(timeout=timeout_seconds)
         self._owns_client = http_client is None
         self._access_token: str | None = None
         self._token_valid_until = 0.0
+        if min_request_interval_seconds < 0:
+            raise ValueError("min_request_interval_seconds는 음수일 수 없다")
+        self._min_request_interval_seconds = min_request_interval_seconds
+        self._monotonic = monotonic
+        self._sleep = sleep
+        self._last_quote_request_at: float | None = None
+
+    @property
+    def environment(self) -> KisEnvironment:
+        return self._environment
 
     def close(self) -> None:
         if self._owns_client:
@@ -67,41 +85,65 @@ class KisReadOnlyClient:
         )
 
     def fetch_domestic_quote(self, symbol: str = "000660", market: str = "J") -> dict[str, Any]:
-        app_key = require_secret(self._secret_provider, _PROVIDER_NAME, "KIS_APP_KEY")
-        app_secret = require_secret(self._secret_provider, _PROVIDER_NAME, "KIS_APP_SECRET")
-        token = self._get_access_token(app_key, app_secret)
-        payload = request_json(
-            _PROVIDER_NAME,
-            lambda: self._client.get(
-                f"{self._base_url}{_QUOTE_PATH}",
-                headers={
-                    "authorization": f"Bearer {token}",
-                    "appkey": app_key,
-                    "appsecret": app_secret,
-                    "tr_id": "FHKST01010100",
-                    "custtype": "P",
-                    "tr_cont": "",
-                    "Content-Type": "application/json",
-                    "Accept": "text/plain",
-                    "charset": "UTF-8",
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-                    ),
-                },
-                params={"FID_COND_MRKT_DIV_CODE": market, "FID_INPUT_ISCD": symbol},
-            ),
+        return self._fetch_output_object(
+            path=_QUOTE_PATH,
+            tr_id="FHKST01010100",
+            params={"FID_COND_MRKT_DIV_CODE": market, "FID_INPUT_ISCD": symbol},
         )
-        if str(payload.get("rt_cd")) != "0":
-            error_code = payload.get("msg_cd")
-            raise ProviderResponseError(
-                _PROVIDER_NAME,
-                error_code=str(error_code) if error_code is not None else None,
-            )
-        output = payload.get("output")
-        if not isinstance(output, dict):
-            raise ProviderResponseError(_PROVIDER_NAME, error_code="missing-output")
-        return output
+
+    def fetch_intraday_prices(
+        self,
+        symbol: str,
+        *,
+        as_of_time_kst: str,
+        market: str = "J",
+    ) -> list[dict[str, Any]]:
+        """당일 분봉의 공급자 거래일·체결시각을 함께 조회한다."""
+
+        if len(as_of_time_kst) != 6 or not as_of_time_kst.isdigit():
+            raise ValueError("as_of_time_kst는 HHMMSS 6자리여야 한다")
+        return self._fetch_output_array(
+            path=_INTRADAY_PRICE_PATH,
+            tr_id="FHKST03010200",
+            output_key="output2",
+            params={
+                "FID_COND_MRKT_DIV_CODE": market,
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_HOUR_1": as_of_time_kst,
+                "FID_PW_DATA_INCU_YN": "Y",
+                "FID_ETC_CLS_CODE": "",
+            },
+        )
+
+    def fetch_etf_etn_quote(self, symbol: str, market: str = "J") -> dict[str, Any]:
+        """ETF/ETN 현재가와 KIS가 `nav`로 표시하는 값을 조회한다."""
+
+        return self._fetch_output_object(
+            path=_ETF_ETN_QUOTE_PATH,
+            tr_id="FHPST02400000",
+            params={"FID_COND_MRKT_DIV_CODE": market, "FID_INPUT_ISCD": symbol},
+        )
+
+    def fetch_etf_nav_intraday(
+        self,
+        symbol: str,
+        *,
+        interval_seconds: str = "60",
+    ) -> list[dict[str, Any]]:
+        """KIS NAV/IIV 비교추이의 분별 `nav`·`bsop_hour`를 조회한다."""
+
+        if not interval_seconds.isdigit() or int(interval_seconds) <= 0:
+            raise ValueError("interval_seconds는 양의 초 문자열이어야 한다")
+        return self._fetch_output_array(
+            path=_ETF_NAV_INTRADAY_PATH,
+            tr_id="FHPST02440100",
+            output_key="output",
+            params={
+                "FID_COND_MRKT_DIV_CODE": "E",
+                "FID_INPUT_ISCD": symbol,
+                "FID_HOUR_CLS_CODE": interval_seconds,
+            },
+        )
 
     def probe_read_only(self, symbol: str = "000660") -> ReadOnlyProbeEvidence:
         started = time.perf_counter()
@@ -117,7 +159,7 @@ class KisReadOnlyClient:
         )
 
     def _get_access_token(self, app_key: str, app_secret: str) -> str:
-        now = time.monotonic()
+        now = self._monotonic()
         if self._access_token is not None and now < self._token_valid_until:
             return self._access_token
         payload = request_json(
@@ -141,6 +183,83 @@ class KisReadOnlyClient:
         buffer = 21600.0 if expires_in > 21600.0 else 60.0
         self._token_valid_until = now + max(1.0, expires_in - buffer)
         return token
+
+    def _fetch_output_object(
+        self,
+        *,
+        path: str,
+        tr_id: str,
+        params: dict[str, str],
+    ) -> dict[str, Any]:
+        payload = self._fetch_payload(path=path, tr_id=tr_id, params=params)
+        output = payload.get("output")
+        if not isinstance(output, dict):
+            raise ProviderResponseError(_PROVIDER_NAME, error_code="missing-output")
+        return output
+
+    def _fetch_output_array(
+        self,
+        *,
+        path: str,
+        tr_id: str,
+        output_key: str,
+        params: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        payload = self._fetch_payload(path=path, tr_id=tr_id, params=params)
+        output = payload.get(output_key)
+        if not isinstance(output, list) or not all(isinstance(row, dict) for row in output):
+            raise ProviderResponseError(_PROVIDER_NAME, error_code=f"missing-{output_key}")
+        return output
+
+    def _fetch_payload(
+        self,
+        *,
+        path: str,
+        tr_id: str,
+        params: dict[str, str],
+    ) -> dict[str, Any]:
+        app_key = require_secret(self._secret_provider, _PROVIDER_NAME, "KIS_APP_KEY")
+        app_secret = require_secret(self._secret_provider, _PROVIDER_NAME, "KIS_APP_SECRET")
+        token = self._get_access_token(app_key, app_secret)
+        self._wait_for_request_slot()
+        payload = request_json(
+            _PROVIDER_NAME,
+            lambda: self._client.get(
+                f"{self._base_url}{path}",
+                headers={
+                    "authorization": f"Bearer {token}",
+                    "appkey": app_key,
+                    "appsecret": app_secret,
+                    "tr_id": tr_id,
+                    "custtype": "P",
+                    "tr_cont": "",
+                    "Content-Type": "application/json",
+                    "Accept": "text/plain",
+                    "charset": "UTF-8",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+                    ),
+                },
+                params=params,
+            ),
+        )
+        self._last_quote_request_at = self._monotonic()
+        if str(payload.get("rt_cd")) != "0":
+            error_code = payload.get("msg_cd")
+            raise ProviderResponseError(
+                _PROVIDER_NAME,
+                error_code=str(error_code) if error_code is not None else None,
+            )
+        return payload
+
+    def _wait_for_request_slot(self) -> None:
+        if self._last_quote_request_at is None:
+            return
+        elapsed = self._monotonic() - self._last_quote_request_at
+        remaining = self._min_request_interval_seconds - elapsed
+        if remaining > 0:
+            self._sleep(remaining)
 
 
 def _positive_float(value: object, *, default: float) -> float:

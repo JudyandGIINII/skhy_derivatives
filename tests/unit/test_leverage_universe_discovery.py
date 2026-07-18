@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from skhy_research.application.fund_snapshot_collection import discover_leveraged_products
+from skhy_research.application.h1_live_snapshot import build_h1_live_snapshot_targets
 from skhy_research.application.instrument_master import InstrumentMaster
 from skhy_research.application.leverage_universe_discovery import (
     discover_and_register_krx_leveraged_universe,
@@ -75,3 +76,18 @@ def test_non_single_stock_rows_are_ignored_and_malformed_marker_is_excluded() ->
     assert len(result.exclusions) == 1
     assert result.exclusions[0].source_symbol == "BROKEN"
     assert "배율 marker" in result.exclusions[0].reason
+
+
+def test_builds_live_targets_from_two_underlyings_and_dynamic_universe() -> None:
+    result = discover_and_register_krx_leveraged_universe(
+        _FixtureKrxEtpClient(),
+        InstrumentMaster(),
+        _BASIS_DATE,
+        target_underlyings=frozenset({"SK하이닉스"}),
+    )
+
+    targets = build_h1_live_snapshot_targets(result.products)
+
+    assert {item.symbol for item in targets[:2]} == {"000660", "005930"}
+    assert {item.symbol for item in targets[2:]} == {"0193T0", "0197X0", "520101"}
+    assert len(targets) == len(result.products) + 2

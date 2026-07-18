@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 ORIGINAL_H1_DATA_RESOLUTION = "intraday"
+ORIGINAL_H1_LIVE_DATA_RESOLUTION = "intraday-live-1m-snapshot"
 ORIGINAL_H1_PROMOTION_SCOPE = "h1-original"
 
 

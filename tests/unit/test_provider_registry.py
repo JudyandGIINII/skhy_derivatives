@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal
 
 import pytest
@@ -20,6 +21,7 @@ from skhy_research.domain.provider_capability import (
     ProviderCatalogEntry,
 )
 from skhy_research.ports.errors import UnsupportedCapabilityError
+from skhy_research.ports.market_data import MarketSnapshotBatch, MarketSnapshotTarget
 
 _NOW = 1_800_000_000_000_000_000
 
@@ -62,6 +64,32 @@ class _FakeMarketData:
 
     async def unsubscribe(self, instrument_ids) -> None:  # noqa: ANN001
         return None
+
+
+class _FakeMarketDataSnapshot:
+    def __init__(self, name: str) -> None:
+        self._entry = _catalog_entry(
+            name, "market_data", frozenset({ProviderCapability.QUOTE_SNAPSHOT})
+        )
+
+    def capabilities(self) -> ProviderCatalogEntry:
+        return self._entry
+
+    def connection_health(self) -> ConnectionHealth:
+        return ConnectionHealth(is_connected=True)
+
+    def get_price_snapshots(
+        self,
+        targets: Sequence[MarketSnapshotTarget],
+        *,
+        requested_as_of_utc: int,
+    ) -> MarketSnapshotBatch:
+        return MarketSnapshotBatch(
+            provider_name=self._entry.provider_name,
+            requested_as_of_utc=requested_as_of_utc,
+            received_at_utc=requested_as_of_utc,
+            snapshots=(),
+        )
 
 
 class _FakeReferenceData:
@@ -145,6 +173,15 @@ def test_get_unregistered_market_data_raises() -> None:
     registry = ProviderRegistry()
     with pytest.raises(ProviderNotRegisteredError):
         registry.get_market_data("kis")
+
+
+def test_market_data_snapshot_register_and_get_round_trip() -> None:
+    registry = ProviderRegistry()
+    provider = _FakeMarketDataSnapshot("kis")
+
+    registry.register_market_data_snapshot("kis", provider)
+
+    assert registry.get_market_data_snapshot("kis") is provider
 
 
 def test_duplicate_market_data_registration_raises() -> None:

@@ -70,6 +70,17 @@ class QualityFlag(StrEnum):
     UNVERIFIED_SOCIAL_CLAIM = "UNVERIFIED_SOCIAL_CLAIM"
 
 
+class MarketDataFeedMode(StrEnum):
+    """시세 feed의 운영 모드.
+
+    SIMULATED는 모의서버나 fixture를 뜻하며 원래 H1의 실시간 신호에
+    입력할 수 없다.
+    """
+
+    LIVE = "LIVE"
+    SIMULATED = "SIMULATED"
+
+
 class ReplicationType(StrEnum):
     """PRD 8.2 FundSnapshot.replication_type."""
 

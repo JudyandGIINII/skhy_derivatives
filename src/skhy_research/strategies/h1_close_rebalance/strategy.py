@@ -11,9 +11,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from skhy_research.domain.enums import SignalDirection
+from skhy_research.domain.market import MarketPriceSnapshot
 from skhy_research.domain.reference import FundSnapshot
 from skhy_research.domain.strategy import Signal
 from skhy_research.features.h1_close_pressure.close_pressure import (
+    ORIGINAL_H1_LIVE_DATA_RESOLUTION,
     ORIGINAL_H1_PROMOTION_SCOPE,
     ClosePressureResult,
 )
@@ -58,9 +60,11 @@ class H1CloseRebalanceStrategy:
         expires_at_utc: int,
         signal_id: str,
         estimated_cost: Decimal,
+        live_snapshots_used: list[MarketPriceSnapshot] | None = None,
     ) -> H1Decision:
         self._assert_model_scope(close_pressure)
-        assert_no_lookahead(fund_snapshots_used, decision_time_utc)
+        self._assert_live_snapshot_lineage(close_pressure, input_record_ids, live_snapshots_used)
+        assert_no_lookahead(fund_snapshots_used, decision_time_utc, live_snapshots_used)
 
         explain: dict[str, object] = {
             "close_pressure_value": str(close_pressure.value),
@@ -70,6 +74,9 @@ class H1CloseRebalanceStrategy:
             "promotion_eligible": close_pressure.promotion_eligible,
             "missing_flow_fund_ids": close_pressure.missing_flow_fund_ids,
             "neutral_band": str(self._neutral_band),
+            "live_snapshot_record_ids": tuple(
+                snapshot.record_id for snapshot in live_snapshots_used or []
+            ),
         }
 
         if abs(close_pressure.value) <= self._neutral_band:
@@ -110,3 +117,18 @@ class H1CloseRebalanceStrategy:
                 "승격 비대상 축소모델은 strategy_version을 model_version과 같게 분리해야 함: "
                 f"strategy={self.strategy_version}, model={close_pressure.model_version}"
             )
+
+    @staticmethod
+    def _assert_live_snapshot_lineage(
+        close_pressure: ClosePressureResult,
+        input_record_ids: list[str],
+        live_snapshots_used: list[MarketPriceSnapshot] | None,
+    ) -> None:
+        if close_pressure.data_resolution != ORIGINAL_H1_LIVE_DATA_RESOLUTION:
+            return
+        if not live_snapshots_used:
+            raise H1ModelScopeMismatchError("live H1 feature에 live snapshot lineage가 없다")
+        lineage = set(input_record_ids)
+        missing = [item.record_id for item in live_snapshots_used if item.record_id not in lineage]
+        if missing:
+            raise H1ModelScopeMismatchError(f"live snapshot input_record_id 누락: {missing}")

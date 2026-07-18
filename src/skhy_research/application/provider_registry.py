@@ -13,12 +13,18 @@ from collections.abc import Iterator
 from skhy_research.domain.provider_capability import ProviderCatalogEntry
 from skhy_research.ports.broker import BrokerProvider
 from skhy_research.ports.historical_data import HistoricalDataProvider
-from skhy_research.ports.market_data import MarketDataProvider
+from skhy_research.ports.market_data import MarketDataProvider, MarketDataSnapshotProvider
 from skhy_research.ports.reference_data import ReferenceDataProvider
 
 _ALLOWED_BROKER_NAME = "paper"
 
-AnyProvider = MarketDataProvider | ReferenceDataProvider | HistoricalDataProvider | BrokerProvider
+AnyProvider = (
+    MarketDataProvider
+    | MarketDataSnapshotProvider
+    | ReferenceDataProvider
+    | HistoricalDataProvider
+    | BrokerProvider
+)
 
 
 class NonPaperBrokerRegistrationError(RuntimeError):
@@ -36,6 +42,7 @@ class ProviderNotRegisteredError(RuntimeError):
 class ProviderRegistry:
     def __init__(self) -> None:
         self._market_data: dict[str, MarketDataProvider] = {}
+        self._market_data_snapshots: dict[str, MarketDataSnapshotProvider] = {}
         self._reference_data: dict[str, ReferenceDataProvider] = {}
         self._historical_data: dict[str, HistoricalDataProvider] = {}
         self._broker: BrokerProvider | None = None
@@ -52,6 +59,22 @@ class ProviderRegistry:
             return self._market_data[name]
         except KeyError as exc:
             raise ProviderNotRegisteredError(f"market_data '{name}' 미등록") from exc
+
+    # --- MarketDataSnapshotProvider (Phase 1 point-in-time REST) ---
+    def register_market_data_snapshot(
+        self, name: str, provider: MarketDataSnapshotProvider
+    ) -> None:
+        if name in self._market_data_snapshots:
+            raise DuplicateProviderRegistrationError(
+                f"market_data_snapshot '{name}'는 이미 등록됨"
+            )
+        self._market_data_snapshots[name] = provider
+
+    def get_market_data_snapshot(self, name: str) -> MarketDataSnapshotProvider:
+        try:
+            return self._market_data_snapshots[name]
+        except KeyError as exc:
+            raise ProviderNotRegisteredError(f"market_data_snapshot '{name}' 미등록") from exc
 
     # --- ReferenceDataProvider ---
     def register_reference_data(self, name: str, provider: ReferenceDataProvider) -> None:
@@ -101,6 +124,8 @@ class ProviderRegistry:
         """(port_type, provider_name, provider) 삼중항을 순회한다. capability probe·건강상태 점검용."""
         for name, provider in self._market_data.items():
             yield ("market_data", name, provider)
+        for name, provider in self._market_data_snapshots.items():
+            yield ("market_data_snapshot", name, provider)
         for name, provider in self._reference_data.items():
             yield ("reference_data", name, provider)
         for name, provider in self._historical_data.items():
