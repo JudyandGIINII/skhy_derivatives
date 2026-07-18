@@ -1,0 +1,65 @@
+"""공급자 capability·라이선스·지연 catalog 공통 계약 (PRD 7.4).
+
+모든 공급자 구현은 이 catalog로 capabilities, 호출·구독 한도, 지연 특성,
+저장·재배포 조건, 마지막 확인일을 노출해야 한다. 지원하지 않는 기능은
+빈 데이터로 위장하지 않고 명시적 오류(`UnsupportedCapabilityError`)를 낸다.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict
+
+from skhy_research.domain.market import EpochNanos
+
+
+class ProviderCapability(StrEnum):
+    QUOTE_STREAM = "QUOTE_STREAM"
+    TRADE_STREAM = "TRADE_STREAM"
+    EXPECTED_CLOSING_PRICE = "EXPECTED_CLOSING_PRICE"
+    INSTRUMENT_MASTER = "INSTRUMENT_MASTER"
+    CORPORATE_ACTIONS = "CORPORATE_ACTIONS"
+    ADR_RATIO_CONVERSION_STATUS = "ADR_RATIO_CONVERSION_STATUS"
+    BORROW_QUOTE = "BORROW_QUOTE"
+    HISTORICAL_BARS = "HISTORICAL_BARS"
+    HISTORICAL_STATISTICS = "HISTORICAL_STATISTICS"
+    ACCOUNT_SNAPSHOT = "ACCOUNT_SNAPSHOT"
+    ORDER_SUBMIT = "ORDER_SUBMIT"
+    ORDER_CANCEL = "ORDER_CANCEL"
+    FILL_EVENTS = "FILL_EVENTS"
+
+
+class HealthStatus(StrEnum):
+    HEALTHY = "HEALTHY"
+    DEGRADED = "DEGRADED"
+    DOWN = "DOWN"
+    UNKNOWN = "UNKNOWN"
+
+
+class ProviderCatalogEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider_name: str
+    port_type: str  # market_data|reference_data|historical_data|broker
+    capabilities: frozenset[ProviderCapability]
+    call_rate_limit_per_min: int | None = None
+    subscription_limit: int | None = None
+    expected_latency_ms: float | None = None
+    measured_latency_ms: float | None = None
+    license_terms_url: str
+    storage_redistribution_allowed: bool
+    last_verified_at_utc: EpochNanos
+    health_status: HealthStatus = HealthStatus.UNKNOWN
+
+    def supports(self, capability: ProviderCapability) -> bool:
+        return capability in self.capabilities
+
+
+class ConnectionHealth(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    is_connected: bool
+    measured_latency_ms: float | None = None
+    last_event_at_utc: EpochNanos | None = None
+    reconnect_count: int = 0

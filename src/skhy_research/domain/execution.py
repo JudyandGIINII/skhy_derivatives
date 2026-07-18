@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from skhy_research.domain.enums import OrderSide, OrderStatus, TimeInForce, Venue
+from skhy_research.domain.enums import Currency, OrderSide, OrderStatus, TimeInForce, Venue
 from skhy_research.domain.market import EpochNanos, NonNegativeDecimal
 
 
@@ -64,3 +64,16 @@ class PaperFill(BaseModel):
     fill_model_version: str
     filled_at_utc: EpochNanos
     status: OrderStatus
+
+
+class AccountSnapshot(BaseModel):
+    """BrokerProvider 계좌 상태. v1은 PaperBrokerProvider만 이 타입을 생성한다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    as_of_utc: EpochNanos
+    cash_by_currency: dict[Currency, Decimal] = Field(default_factory=dict)
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    positions: dict[str, Decimal] = Field(default_factory=dict)  # instrument_id -> 수량(음수=숏)
