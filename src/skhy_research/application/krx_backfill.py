@@ -1,9 +1,10 @@
 """KRX 공식 일별 데이터 백필 오케스트레이션 (P1-01, FR-02~06).
 
 실제 백필은 G-04(레버리지 상품 universe)·G-06(데이터 이용조건) 게이트 해소와
-실제 KRX 조회 전용 키가 필요하다(`docs/decisions/gates/G-04.md`,
-`G-06.md`, 현재 둘 다 `UNKNOWN`). 이 모듈은 `HistoricalDataProvider` 포트로만
-동작하므로 fixture 구현과 실제 어댑터가 동일한 코드 경로를 사용한다.
+실제 KRX 조회 전용 키가 필요하다. Markdown gate 문서는 사람용 검토 기록이며,
+호출자는 PostgreSQL의 최신 결정을 `load_gate_registry()`로 검증·로드한 registry를
+주입해야 한다. 이 모듈은 `HistoricalDataProvider` 포트로만 동작하므로 fixture
+구현과 실제 어댑터가 동일한 코드 경로를 사용한다.
 """
 
 from __future__ import annotations

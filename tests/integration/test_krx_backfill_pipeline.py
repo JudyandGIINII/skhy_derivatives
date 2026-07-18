@@ -4,8 +4,9 @@
 데이터다. 실제 KRX 시세가 아니며, `source="synthetic_test_fixture"`로
 명시한다. 이 테스트는 파이프라인의 정합성(커버리지 계산, snapshot 버전관리,
 공급자 대조)을 증명할 뿐, PRD의 "최소 120 KRX 거래일" 완료조건을 실데이터로
-충족시키지는 않는다 — 그 조건은 G-04/G-06 게이트 해소와 실제 KRX 키가
-필요하며 두 게이트 모두 아직 `UNKNOWN`이다(`docs/decisions/gates/`).
+충족시키지는 않는다. G-06의 사람용 결정 문서는 `CONFIRMED`지만 G-04는
+`IN_REVIEW`이고, 런타임에는 검토 완료된 두 결정을 PostgreSQL에 별도로 저장·로드해야
+하므로 실제 백필은 계속 차단된다.
 """
 
 from __future__ import annotations
@@ -17,10 +18,14 @@ from pathlib import Path
 import pytest
 
 from skhy_research.adapters.calendars.static_holiday_provider import StaticHolidayProvider
+from skhy_research.adapters.persistence.gate_decision_store import (
+    PostgresGateDecisionStore,
+)
 from skhy_research.adapters.providers.fixture_historical_data import FixtureHistoricalDataProvider
 from skhy_research.adapters.providers.fixture_support import FixtureCallGateway, FixtureScenario
 from skhy_research.application.calendar_resolver import CalendarResolver
 from skhy_research.application.gate_registry import GateRegistry
+from skhy_research.application.gate_registry_loader import load_gate_registry
 from skhy_research.application.krx_backfill import BackfillGateBlockedError, backfill_daily_bars
 from skhy_research.application.parquet_snapshot import ParquetSnapshotWriter
 from skhy_research.application.provider_registry import ProviderRegistry
@@ -40,22 +45,24 @@ _MIN_TRADING_DAYS = 120
 _GATE_NOW = 1_800_000_000_000_000_000
 
 
+def _confirmed_backfill_decision(gate_id: str, checksum_digit: int) -> GateDecision:
+    return GateDecision(
+        gate_id=gate_id,
+        status=GateStatus.CONFIRMED,
+        evidence_url=f"https://example.com/evidence/{gate_id}",
+        evidence_checksum=f"{checksum_digit:x}" * 64,
+        responsible_provider="official-provider",
+        conclusion=f"{gate_id} 백필 범위 확인",
+        confirmed_at_utc=_GATE_NOW,
+        valid_until_utc=_GATE_NOW + 90_000_000_000_000,
+        recorded_at_utc=_GATE_NOW,
+    )
+
+
 def _confirmed_backfill_gates() -> GateRegistry:
     registry = GateRegistry()
     for index, gate_id in enumerate(("G-04", "G-06"), start=1):
-        registry.record_decision(
-            GateDecision(
-                gate_id=gate_id,
-                status=GateStatus.CONFIRMED,
-                evidence_url=f"https://example.com/evidence/{gate_id}",
-                evidence_checksum=f"{index:x}" * 64,
-                responsible_provider="official-provider",
-                conclusion=f"{gate_id} 백필 범위 확인",
-                confirmed_at_utc=_GATE_NOW,
-                valid_until_utc=_GATE_NOW + 90_000_000_000_000,
-                recorded_at_utc=_GATE_NOW,
-            )
-        )
+        registry.record_decision(_confirmed_backfill_decision(gate_id, index))
     return registry
 
 
@@ -163,6 +170,38 @@ def test_backfill_pipeline_meets_120_trading_day_minimum_with_synthetic_data(tmp
     assert result.coverage.covered_trading_days == _MIN_TRADING_DAYS
     assert result.coverage.meets_minimum(_MIN_TRADING_DAYS) is True
     assert result.reconciliation_mismatches == ()  # 두 공급자 종가가 동일하게 구성됨
+
+
+@pytest.mark.integration
+def test_postgres_gate_decisions_load_and_unblock_synthetic_backfill(clean_pg) -> None:
+    """DB의 기계용 결정이 runtime registry를 채워 실제 gate 검사 경로를 통과한다."""
+    store = PostgresGateDecisionStore(clean_pg)
+    for index, gate_id in enumerate(("G-04", "G-06"), start=1):
+        store.save_decision(_confirmed_backfill_decision(gate_id, index))
+    loaded_gate_registry = load_gate_registry(store)
+
+    calendar_resolver = CalendarResolver(StaticHolidayProvider())
+    start = date(2026, 1, 2)
+    trading_days = expected_trading_days(calendar_resolver, Venue.KRX, start, start)
+    provider_registry, _ = _build_registry_with_synthetic_bars(trading_days)
+
+    result = backfill_daily_bars(
+        provider_registry,
+        calendar_resolver,
+        Venue.KRX,
+        "krx",
+        _INSTRUMENT_ID,
+        start,
+        start,
+        local_datetime_to_utc_nanos(start, time(0, 0), Venue.KRX),
+        local_datetime_to_utc_nanos(start, time(23, 59), Venue.KRX),
+        gate_registry=loaded_gate_registry,
+        gate_as_of_utc=_GATE_NOW,
+    )
+
+    assert loaded_gate_registry.blocks("G-04", _GATE_NOW) is False
+    assert loaded_gate_registry.blocks("G-06", _GATE_NOW) is False
+    assert result.coverage.covered_trading_days == 1
 
 
 def test_backfill_detects_missing_trading_days() -> None:

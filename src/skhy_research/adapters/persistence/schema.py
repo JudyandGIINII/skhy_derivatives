@@ -1,4 +1,4 @@
-"""실행 manifest·lineage·execution edge PostgreSQL 스키마 (P0-02).
+"""실행 manifest·lineage·gate 결정 PostgreSQL 스키마 (P0-02/P0-11).
 
 스키마는 SQLAlchemy MetaData로 단일 정의하고 `init_schema()`로 멱등하게
 적용한다. `migrations/0001_initial_schema.sql`은 동일 스키마의 문서화된
@@ -107,6 +107,20 @@ ingestion_checkpoint = Table(
     Column("dataset", String, primary_key=True),
     Column("cursor", String, nullable=False),
     Column("updated_at_utc", BigInteger, nullable=False),
+)
+
+gate_decision = Table(
+    "gate_decision",
+    metadata,
+    Column("gate_id", String, primary_key=True),
+    Column("status", String, nullable=False),
+    Column("evidence_url", String, nullable=True),
+    Column("evidence_checksum", String, nullable=True),
+    Column("responsible_provider", String, nullable=True),
+    Column("conclusion", String, nullable=True),
+    Column("confirmed_at_utc", BigInteger, nullable=True),
+    Column("valid_until_utc", BigInteger, nullable=True),
+    Column("recorded_at_utc", BigInteger, primary_key=True),
 )
 
 

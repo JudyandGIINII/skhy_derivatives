@@ -10,9 +10,18 @@ from skhy_research.application.gate_registry import (
     InvalidGateDecisionError,
     UnknownGateError,
 )
+from skhy_research.application.gate_registry_loader import load_gate_registry
 from skhy_research.domain.gate import GateDecision, GateStatus
 
 _NOW = 1_800_000_000_000_000_000
+
+
+class _StubDecisionStore:
+    def __init__(self, decisions: list[GateDecision]) -> None:
+        self._decisions = decisions
+
+    def load_all_decisions(self) -> list[GateDecision]:
+        return self._decisions
 
 
 def _confirmed_decision(gate_id: str, **updates: object) -> GateDecision:
@@ -91,6 +100,17 @@ def test_confirmed_with_evidence_resolves_and_unblocks() -> None:
 
     assert registry.is_resolved("G-06", _NOW) is True
     assert registry.blocks("G-06", _NOW) is False
+
+
+def test_loader_applies_same_confirmed_validation_as_direct_recording() -> None:
+    incomplete = GateDecision(
+        gate_id="G-06",
+        status=GateStatus.CONFIRMED,
+        recorded_at_utc=_NOW,
+    )
+
+    with pytest.raises(InvalidGateDecisionError, match="필드 누락"):
+        load_gate_registry(_StubDecisionStore([incomplete]))
 
 
 def test_confirmed_gate_expires_after_valid_until() -> None:
