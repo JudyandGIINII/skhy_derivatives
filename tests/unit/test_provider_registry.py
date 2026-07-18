@@ -81,6 +81,9 @@ class _FakeReferenceData:
             self._entry.provider_name, ProviderCapability.ADR_RATIO_CONVERSION_STATUS
         )
 
+    def get_fund_snapshot(self, fund_id: str):
+        raise UnsupportedCapabilityError(self._entry.provider_name, ProviderCapability.FUND_SNAPSHOT)
+
 
 class _FakeHistoricalData:
     def __init__(self, name: str) -> None:

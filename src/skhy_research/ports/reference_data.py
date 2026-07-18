@@ -6,7 +6,7 @@ from typing import Protocol
 
 from skhy_research.domain.instrument import CorporateActionRecord, InstrumentRecord
 from skhy_research.domain.provider_capability import ProviderCatalogEntry
-from skhy_research.domain.reference import ConversionStatus
+from skhy_research.domain.reference import ConversionStatus, FundSnapshot
 
 
 class ReferenceDataProvider(Protocol):
@@ -19,3 +19,5 @@ class ReferenceDataProvider(Protocol):
     ) -> list[CorporateActionRecord]: ...
 
     def get_conversion_status(self, instrument_id: str) -> ConversionStatus: ...
+
+    def get_fund_snapshot(self, fund_id: str) -> FundSnapshot: ...

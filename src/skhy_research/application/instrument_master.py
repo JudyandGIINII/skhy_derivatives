@@ -77,6 +77,9 @@ class InstrumentMaster:
     def get_instrument(self, instrument_id: str) -> InstrumentRecord | None:
         return self._instruments.get(instrument_id)
 
+    def list_instruments(self) -> list[InstrumentRecord]:
+        return list(self._instruments.values())
+
     def is_active_as_of(self, instrument_id: str, as_of_utc: int) -> bool:
         instrument = self._instruments.get(instrument_id)
         if instrument is None:

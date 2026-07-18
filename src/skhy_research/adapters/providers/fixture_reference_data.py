@@ -5,7 +5,7 @@ from __future__ import annotations
 from skhy_research.adapters.providers.fixture_support import FixtureCallGateway, FixtureScenario
 from skhy_research.domain.instrument import CorporateActionRecord, InstrumentRecord
 from skhy_research.domain.provider_capability import ProviderCapability, ProviderCatalogEntry
-from skhy_research.domain.reference import ConversionStatus
+from skhy_research.domain.reference import ConversionStatus, FundSnapshot
 from skhy_research.ports.errors import UnsupportedCapabilityError
 
 
@@ -16,11 +16,13 @@ class FixtureReferenceDataProvider:
         gateway: FixtureCallGateway,
         instrument_master_scenario: FixtureScenario | None = None,
         conversion_status_scenarios: dict[str, FixtureScenario] | None = None,
+        fund_snapshot_scenarios: dict[str, FixtureScenario] | None = None,
     ) -> None:
         self._entry = catalog_entry
         self._gateway = gateway
         self._instrument_master_scenario = instrument_master_scenario
         self._conversion_status_scenarios = conversion_status_scenarios or {}
+        self._fund_snapshot_scenarios = fund_snapshot_scenarios or {}
 
     def capabilities(self) -> ProviderCatalogEntry:
         return self._entry
@@ -48,3 +50,12 @@ class FixtureReferenceDataProvider:
         if not self._entry.supports(ProviderCapability.CORPORATE_ACTIONS):
             raise UnsupportedCapabilityError(self._entry.provider_name, ProviderCapability.CORPORATE_ACTIONS)
         return []
+
+    def get_fund_snapshot(self, fund_id: str) -> FundSnapshot:
+        if not self._entry.supports(ProviderCapability.FUND_SNAPSHOT):
+            raise UnsupportedCapabilityError(self._entry.provider_name, ProviderCapability.FUND_SNAPSHOT)
+        scenario = self._fund_snapshot_scenarios.get(fund_id)
+        if scenario is None:
+            raise KeyError(f"{fund_id}에 대한 fixture 시나리오가 없다")
+        payload = self._gateway.resolve(scenario)
+        return FundSnapshot(**payload)
