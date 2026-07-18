@@ -70,6 +70,7 @@ markers = [
     "contract: 공급자 계약 테스트 (fixture 기반, 네트워크 차단)",
     "property: property-based 테스트",
     "replay: 결정론적 이벤트 재생 테스트",
+    "integration: 로컬/CI PostgreSQL 등 실 인프라가 필요한 통합 테스트 (연결 불가 시 skip)",
     "e2e: 통합·E2E 테스트",
     "smoke: 실제 API 조회 전용 smoke 테스트 (사용자 키 주입 환경 전용, 기본 비활성)",
 ]

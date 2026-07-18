@@ -17,7 +17,7 @@ docker compose up -d postgres
 
 **환경 참고사항**: 이 저장소를 처음 구성한 에이전트 세션에는 Docker Desktop(또는 동등한
 daemon)이 설치되어 있지 않았다. 해당 세션에서는 동일한 접속 정보
-(`postgresql://skhy:skhy_local_dev@localhost:5432/skhy_research`, PRD/`implementation_plan.md`
+(`postgresql+psycopg://skhy:skhy_local_dev@localhost:5432/skhy_research`, PRD/`implementation_plan.md`
 4.2의 PostgreSQL 16 결정과 동일 버전)로 Homebrew의 `postgresql@16`을 대신 사용했다.
 
 ```bash
