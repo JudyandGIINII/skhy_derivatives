@@ -1,13 +1,17 @@
-# Phase 1 완료조건 점검 (`implementation_plan.md` 5.3)
+# Phase 1 완료조건 정합성 점검 — 원 15:10 H1 미완료 (`implementation_plan.md` 5.3)
+
+> **현재 상태:** daily-proxy(`h1_krx_daily_proxy_reduced_v1`) 경로 완료 / 원 15:10 H1
+> 백테스트·리스크·승격 경로 미완료. daily-proxy 결과는 `promotion_eligible=False`인
+> 축소 연구 결과이며 PRD Phase 1 완료나 원 H1의 PASS/HOLD/REJECT 판정으로 승격할 수 없다.
 
 | # | 완료조건 | 상태 | 근거 |
 | --- | --- | --- | --- |
-| 1 | 신뢰 가능한 H1 데이터가 최소 120 KRX 거래일이며 60/30/30 시간순 분할과 이후 walk-forward 결과가 재현된다 | ✅ daily-proxy 연구 완료 | 2026-07-18 dev DB의 실제 KRX `000660` 120거래일(2026-01-20~07-16)과 ETP NAV/IV·상장좌수 315 snapshot으로 `skhy-research backtest`를 2회 실행. 두 번 모두 data hash `3f8edad2…e946`, result hash `ab71cd76…2e88` 일치 |
-| 2 | 15:10 시점 신호에 사후 공개 AUM/NAV가 포함되지 않았다는 lineage 감사가 통과한다 | ✅ 충족 | `tests/e2e/test_h1_lookahead_lineage_audit.py`: 정상 케이스(전일 공개 NAV)는 raw→normalized→signal lineage로 역추적되고, 위반 케이스(당일 장후 확정 NAV)는 `LookaheadViolationError`로 신호·lineage 자체가 생성되지 않음을 실증 |
-| 3 | 기본 비용과 각 비용 2배 결과, 집중도, 신뢰구간, 반증 지표를 포함한 리포트로 H1을 PASS/HOLD/REJECT로 판정한다 | ✅ daily-proxy 실데이터 충족 | `application/h1_daily_proxy_walk_forward.py`가 feature→event engine 왕복체결→기본/2배 비용→기대값·PF·MDD·집중도·bootstrap CI·permutation→promotion을 연결. 실제 32거래 결과는 daily-proxy 승격 비대상 정책에 따라 `HOLD`이며 원 H1 성과와 합치지 않음 |
-| 4 | G-03 미확정이면 완전모델을 가장하지 않고 축소모델 버전과 품질 경고를 명시한다 | ✅ 충족 | `features/h1_close_pressure/close_pressure.py`: `observable_flow_adjustment`가 결측이면 `model_version="reduced"`로 낮추고 결측 상품을 `missing_flow_fund_ids`에 남김(`tests/unit/test_h1_close_pressure.py`). G-03은 여전히 `UNKNOWN` |
+| 1 | 신뢰 가능한 H1 데이터가 최소 120 KRX 거래일이며 60/30/30 시간순 분할과 이후 walk-forward 결과가 재현된다 | ✅ daily-proxy 경로만 완료 / ❌ 원 H1 미완료 | 2026-07-18 dev DB의 실제 KRX `000660` 120거래일(2026-01-20~07-16)과 ETP NAV/IV·상장좌수 315 snapshot으로 daily-proxy `skhy-research backtest`를 2회 실행. 두 번 모두 data hash `3f8edad2…e946`, result hash `ab71cd76…2e88` 일치. 원 15:10 호가 기반 H1 백테스트 재현 근거는 아님 |
+| 2 | 15:10 시점 신호에 사후 공개 AUM/NAV가 포함되지 않았다는 lineage 감사가 통과한다 | ⚠️ 감사 규칙 테스트 통과 / 원 H1 경로 미완료 | `tests/e2e/test_h1_lookahead_lineage_audit.py`: 정상 케이스(전일 공개 NAV)는 raw→normalized→signal lineage로 역추적되고, 위반 케이스(당일 장후 확정 NAV)는 `LookaheadViolationError`로 신호·lineage 자체가 생성되지 않음을 실증. 원 15:10 실데이터 백테스트·리스크 연결 완료를 뜻하지 않음 |
+| 3 | 기본 비용과 각 비용 2배 결과, 집중도, 신뢰구간, 반증 지표를 포함한 리포트로 H1을 PASS/HOLD/REJECT로 판정한다 | ✅ daily-proxy 리포트만 완료 / ❌ 원 H1 승격 미완료 | `application/h1_daily_proxy_walk_forward.py`가 daily-proxy feature→event engine 왕복체결→기본/2배 비용→기대값·PF·MDD·집중도·bootstrap CI·permutation을 연결. 실제 32거래 결과의 `HOLD`는 승격 불가 proxy 표기이며 원 H1의 PASS/HOLD/REJECT 판정이 아님 |
+| 4 | G-03 미확정이면 완전모델을 가장하지 않고 축소모델 버전과 품질 경고를 명시한다 | ✅ 축소경로 표기 충족 / ❌ 원 H1 미완료 | `features/h1_close_pressure/close_pressure.py`: `observable_flow_adjustment`가 결측이면 `model_version="reduced"`로 낮추고 결측 상품을 `missing_flow_fund_ids`에 남김(`tests/unit/test_h1_close_pressure.py`). G-03은 여전히 `UNKNOWN`이므로 원 15:10 H1 완료로 볼 수 없음 |
 
-## 실데이터 daily-proxy 실행 결과
+## 완료된 범위: 실데이터 daily-proxy 실행 결과
 
 - 기초자산: 실제 KRX `000660` Bar 120거래일, 2026-01-20~2026-07-16.
 - ETP: ETF/ETN endpoint를 거래일·endpoint별 한 번씩 read-only 호출해 raw 240건과
@@ -28,6 +32,13 @@
 - 판정: `h1_krx_daily_proxy_reduced_v1`은 `promotion_eligible=False`, resolution
   `daily-proxy`, scope `h1-daily-proxy-research-only`이므로 성과와 무관하게 `HOLD`다.
   원래 15:10 H1(`h1-original`)의 PASS/REJECT 근거로 병합하지 않는다.
+
+## 미완료 범위: 원 15:10 H1
+
+- 15:10 시점의 신선한 실시간 호가를 사용하는 원 H1 백테스트 경로.
+- 모든 `OrderIntent`를 FR-14 리스크 엔진에 연결해 ALLOW/BLOCK/REDUCE를 보존하는 경로.
+- 전략별 필수 비용항목 completeness/mutation gate를 통과한 기본·2배 비용 실험.
+- 위 근거를 사용한 원 H1의 승격 가능 PASS/HOLD/REJECT 최종 판정.
 
 ## 런타임 gate 결정 로드
 

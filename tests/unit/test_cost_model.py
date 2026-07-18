@@ -6,7 +6,15 @@ from decimal import Decimal
 
 import pytest
 
-from skhy_research.engine.cost_model import CostModelParams, estimate_transaction_cost
+from skhy_research.engine.cost_model import (
+    CostComponent,
+    CostModelCompletenessError,
+    CostModelParams,
+    estimate_transaction_cost,
+    required_cost_components,
+    validate_cost_model_completeness,
+    validate_experiment_cost_model,
+)
 
 _PARAMS = CostModelParams(
     commission_rate=Decimal("0.00015"),
@@ -100,3 +108,77 @@ def test_zero_quote_depth_treats_participation_as_full() -> None:
         Decimal("100"), Decimal("100"), Decimal("10"), Decimal("0"), _PARAMS, is_sell=False
     )
     assert cost.market_impact_cost > Decimal("0")
+
+
+def _complete_cost_components(strategy_id: str) -> dict[CostComponent, Decimal]:
+    return {
+        component: Decimal("0.0001") for component in required_cost_components(strategy_id)
+    }
+
+
+@pytest.mark.parametrize(
+    "strategy_id",
+    [
+        "h1_close_rebalance",
+        "h2_adr_convergence",
+        "h3_nxt_nasdaq_leadlag",
+    ],
+)
+def test_experiment_cost_model_passes_completeness_and_mutation_gate(strategy_id: str) -> None:
+    components = _complete_cost_components(strategy_id)
+
+    report = validate_experiment_cost_model(strategy_id, components)
+
+    assert report.mutation_count == 2 * len(report.required_components)
+
+
+@pytest.mark.parametrize(
+    "strategy_id",
+    [
+        "h1_close_rebalance",
+        "h2_adr_convergence",
+        "h3_nxt_nasdaq_leadlag",
+    ],
+)
+def test_each_required_cost_deletion_or_zero_fails_experiment(strategy_id: str) -> None:
+    baseline = _complete_cost_components(strategy_id)
+
+    for component in required_cost_components(strategy_id):
+        missing_mutation = dict(baseline)
+        del missing_mutation[component]
+        with pytest.raises(CostModelCompletenessError, match=component.value):
+            validate_experiment_cost_model(strategy_id, missing_mutation)
+
+        zero_mutation = dict(baseline)
+        zero_mutation[component] = Decimal("0")
+        with pytest.raises(CostModelCompletenessError, match=component.value):
+            validate_experiment_cost_model(strategy_id, zero_mutation)
+
+
+def test_h2_requires_fx_adr_and_borrow_costs() -> None:
+    required = required_cost_components("h2_adr_convergence")
+
+    assert CostComponent.FX in required
+    assert CostComponent.ADR_ISSUANCE_CANCELLATION in required
+    assert CostComponent.BORROW in required
+
+
+def test_unknown_strategy_cost_profile_is_fail_closed() -> None:
+    with pytest.raises(CostModelCompletenessError, match="알 수 없는 전략"):
+        validate_cost_model_completeness("unapproved_strategy", {})
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["commission_rate", "tax_rate", "market_impact_coefficient"],
+)
+def test_zero_core_cost_parameter_is_rejected(field_name: str) -> None:
+    values = {
+        "commission_rate": Decimal("0.00015"),
+        "tax_rate": Decimal("0.0018"),
+        "market_impact_coefficient": Decimal("0.1"),
+    }
+    values[field_name] = Decimal("0")
+
+    with pytest.raises(CostModelCompletenessError, match=field_name):
+        CostModelParams(**values)
