@@ -14,17 +14,20 @@ from datetime import date, time
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from skhy_research.adapters.calendars.static_holiday_provider import StaticHolidayProvider
 from skhy_research.adapters.providers.fixture_historical_data import FixtureHistoricalDataProvider
 from skhy_research.adapters.providers.fixture_support import FixtureCallGateway, FixtureScenario
 from skhy_research.application.calendar_resolver import CalendarResolver
 from skhy_research.application.gate_registry import GateRegistry
-from skhy_research.application.krx_backfill import backfill_daily_bars
+from skhy_research.application.krx_backfill import BackfillGateBlockedError, backfill_daily_bars
 from skhy_research.application.parquet_snapshot import ParquetSnapshotWriter
 from skhy_research.application.provider_registry import ProviderRegistry
 from skhy_research.application.trading_day_coverage import expected_trading_days
 from skhy_research.domain.calendar import local_datetime_to_utc_nanos
 from skhy_research.domain.enums import AdjustmentStatus, Currency, Session, Venue
+from skhy_research.domain.gate import GateDecision, GateStatus
 from skhy_research.domain.market import Bar, BarConstructionMethod
 from skhy_research.domain.provider_capability import (
     HealthStatus,
@@ -34,6 +37,26 @@ from skhy_research.domain.provider_capability import (
 
 _INSTRUMENT_ID = "SKHY_000660_KRX_COMMON"
 _MIN_TRADING_DAYS = 120
+_GATE_NOW = 1_800_000_000_000_000_000
+
+
+def _confirmed_backfill_gates() -> GateRegistry:
+    registry = GateRegistry()
+    for index, gate_id in enumerate(("G-04", "G-06"), start=1):
+        registry.record_decision(
+            GateDecision(
+                gate_id=gate_id,
+                status=GateStatus.CONFIRMED,
+                evidence_url=f"https://example.com/evidence/{gate_id}",
+                evidence_checksum=f"{index:x}" * 64,
+                responsible_provider="official-provider",
+                conclusion=f"{gate_id} 백필 범위 확인",
+                confirmed_at_utc=_GATE_NOW,
+                valid_until_utc=_GATE_NOW + 90_000_000_000_000,
+                recorded_at_utc=_GATE_NOW,
+            )
+        )
+    return registry
 
 
 def _catalog(name: str) -> ProviderCatalogEntry:
@@ -131,6 +154,8 @@ def test_backfill_pipeline_meets_120_trading_day_minimum_with_synthetic_data(tmp
         end=actual_end,
         start_utc=start_utc,
         end_utc=end_utc,
+        gate_registry=_confirmed_backfill_gates(),
+        gate_as_of_utc=_GATE_NOW,
         secondary_provider_name="kis",
     )
 
@@ -151,7 +176,17 @@ def test_backfill_detects_missing_trading_days() -> None:
     end_utc = local_datetime_to_utc_nanos(end, time(23, 59), Venue.KRX)
 
     result = backfill_daily_bars(
-        registry, calendar_resolver, Venue.KRX, "krx", _INSTRUMENT_ID, start, end, start_utc, end_utc
+        registry,
+        calendar_resolver,
+        Venue.KRX,
+        "krx",
+        _INSTRUMENT_ID,
+        start,
+        end,
+        start_utc,
+        end_utc,
+        gate_registry=_confirmed_backfill_gates(),
+        gate_as_of_utc=_GATE_NOW,
     )
 
     assert result.coverage.is_complete is False
@@ -203,6 +238,8 @@ def test_backfill_detects_source_divergence_beyond_tolerance() -> None:
         end,
         start_utc,
         end_utc,
+        gate_registry=_confirmed_backfill_gates(),
+        gate_as_of_utc=_GATE_NOW,
         secondary_provider_name="kis",
     )
 
@@ -219,7 +256,17 @@ def test_parquet_snapshot_round_trips_synthetic_backfill(tmp_path: Path) -> None
     end_utc = local_datetime_to_utc_nanos(end, time(23, 59), Venue.KRX)
 
     result = backfill_daily_bars(
-        registry, calendar_resolver, Venue.KRX, "krx", _INSTRUMENT_ID, start, end, start_utc, end_utc
+        registry,
+        calendar_resolver,
+        Venue.KRX,
+        "krx",
+        _INSTRUMENT_ID,
+        start,
+        end,
+        start_utc,
+        end_utc,
+        gate_registry=_confirmed_backfill_gates(),
+        gate_as_of_utc=_GATE_NOW,
     )
 
     writer = ParquetSnapshotWriter(tmp_path)
@@ -231,8 +278,20 @@ def test_parquet_snapshot_round_trips_synthetic_backfill(tmp_path: Path) -> None
 
 
 def test_real_backfill_is_still_gated_pending_g04_and_g06() -> None:
-    """합성 데이터로 파이프라인은 검증됐지만, 실데이터 수집은 여전히 게이트로 막혀 있다."""
-    registry = GateRegistry()
-    now = 1_800_000_000_000_000_000
-    assert registry.blocks("G-04", now) is True
-    assert registry.blocks("G-06", now) is True
+    """백필 진입점 자체가 미확인 gate를 검사해 provider 호출 전에 차단한다."""
+    start = date(2026, 1, 2)
+    end = date(2026, 1, 3)
+    with pytest.raises(BackfillGateBlockedError, match="G-04.*G-06"):
+        backfill_daily_bars(
+            ProviderRegistry(),
+            CalendarResolver(StaticHolidayProvider()),
+            Venue.KRX,
+            "krx",
+            _INSTRUMENT_ID,
+            start,
+            end,
+            local_datetime_to_utc_nanos(start, time(0, 0), Venue.KRX),
+            local_datetime_to_utc_nanos(end, time(23, 59), Venue.KRX),
+            gate_registry=GateRegistry(),
+            gate_as_of_utc=_GATE_NOW,
+        )

@@ -1,14 +1,18 @@
 """G-01~G-08 gate 상태 관리 (P0-11, PRD 19장, `implementation_plan.md` 7장).
 
 미확인·만료·거부 상태는 항상 `blocks()=True`다 ("미확인 상태의 기본 동작은
-BLOCK이다"). CONFIRMED 기록에는 evidence_url을 강제해 언론·SNS 보도만으로
-상태를 바꾸는 것을 최소한 구조적으로 어렵게 한다(완전한 방지는 절차의
-영역이며 코드로 강제할 수 없다).
+BLOCK이다"). CONFIRMED 기록에는 URL·SHA-256 checksum·결론·담당 provider·
+확인시각·유효기간을 모두 강제하며, 불완전하거나 시간 범위가 잘못된 증거는
+등록 단계에서 거부한다.
 """
 
 from __future__ import annotations
 
+import re
+
 from skhy_research.domain.gate import GateDecision, GateDefinition, GateStatus
+
+_SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
 
 GATE_DEFINITIONS: dict[str, GateDefinition] = {
     "G-01": GateDefinition(
@@ -72,11 +76,41 @@ class GateRegistry:
     def record_decision(self, decision: GateDecision) -> None:
         if decision.gate_id not in GATE_DEFINITIONS:
             raise UnknownGateError(f"알 수 없는 gate_id: {decision.gate_id}")
-        if decision.status == GateStatus.CONFIRMED and not decision.evidence_url:
-            raise InvalidGateDecisionError(
-                f"{decision.gate_id}를 CONFIRMED로 기록하려면 evidence_url이 필요하다"
-            )
+        if decision.status == GateStatus.CONFIRMED:
+            self._validate_confirmed_decision(decision)
         self._decisions[decision.gate_id] = decision
+
+    @staticmethod
+    def _validate_confirmed_decision(decision: GateDecision) -> None:
+        required_text_fields = {
+            "evidence_url": decision.evidence_url,
+            "evidence_checksum": decision.evidence_checksum,
+            "responsible_provider": decision.responsible_provider,
+            "conclusion": decision.conclusion,
+        }
+        missing = [
+            name
+            for name, value in required_text_fields.items()
+            if value is None or not value.strip()
+        ]
+        if decision.confirmed_at_utc is None:
+            missing.append("confirmed_at_utc")
+        if decision.valid_until_utc is None:
+            missing.append("valid_until_utc")
+        if missing:
+            raise InvalidGateDecisionError(
+                f"{decision.gate_id}를 CONFIRMED로 기록하기 위한 필드 누락: {missing}"
+            )
+
+        assert decision.evidence_checksum is not None
+        assert decision.confirmed_at_utc is not None
+        assert decision.valid_until_utc is not None
+        if not _SHA256_HEX.fullmatch(decision.evidence_checksum):
+            raise InvalidGateDecisionError("evidence_checksum은 SHA-256 64자리 hex여야 한다")
+        if decision.confirmed_at_utc > decision.recorded_at_utc:
+            raise InvalidGateDecisionError("confirmed_at_utc는 recorded_at_utc보다 이후일 수 없다")
+        if decision.valid_until_utc <= decision.confirmed_at_utc:
+            raise InvalidGateDecisionError("valid_until_utc는 confirmed_at_utc보다 이후여야 한다")
 
     def effective_status(self, gate_id: str, as_of_utc: int) -> GateStatus:
         if gate_id not in GATE_DEFINITIONS:

@@ -13,6 +13,7 @@ from skhy_research.data.quality.detectors import SequenceState, detect_crossed_q
 from skhy_research.data.reconciliation.divergence import (
     check_source_divergence,
     check_stale_reference,
+    source_time_skew_exceeds,
 )
 from skhy_research.domain.enums import QualityFlag
 from skhy_research.domain.market import MarketQuote
@@ -25,6 +26,7 @@ _BLOCKING_FLAGS = frozenset(
         QualityFlag.HALTED,
         QualityFlag.DUPLICATE,
         QualityFlag.OUT_OF_ORDER,
+        QualityFlag.GAP,
         QualityFlag.UNKNOWN_CONVERSION,
         QualityFlag.BORROW_UNAVAILABLE,
     }
@@ -61,7 +63,11 @@ class QualityGate:
         max_time_skew_ns: int,
     ) -> QualityEvaluation:
         flags: set[QualityFlag] = set(primary.quality_flag)
-        if check_source_divergence(primary, secondary, tolerance_pct, max_time_skew_ns):
+        if source_time_skew_exceeds(primary, secondary, max_time_skew_ns):
+            # 어느 쪽이 오래됐는지와 무관하게 동기화되지 않은 비교 쌍은 실행 입력으로
+            # 사용할 수 없다. STALE은 이 불확실 상태를 안전하게 차단한다.
+            flags.add(QualityFlag.STALE)
+        elif check_source_divergence(primary, secondary, tolerance_pct, max_time_skew_ns):
             flags.add(QualityFlag.SOURCE_DIVERGENCE)
         blocks = bool(flags & _BLOCKING_FLAGS)
         return QualityEvaluation(frozenset(flags), False, blocks)

@@ -81,8 +81,12 @@ raw_record_catalog = Table(
     Column("provider_sequence", String, nullable=True),
     Column("storage_path", String, nullable=False),
     Column("conflict_with", String, nullable=True),
-    # dedupe_key는 conflict가 없는 한 (source, dataset) 안에서 유일해야 한다.
-    # 유일성은 애플리케이션 레벨에서 강제한다(raw_recorder.py): 조회 후 조건부 삽입.
+    UniqueConstraint(
+        "source",
+        "dataset",
+        "dedupe_key",
+        name="uq_raw_record_source_dataset_dedupe",
+    ),
 )
 
 ingestion_checkpoint = Table(

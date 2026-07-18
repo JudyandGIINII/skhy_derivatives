@@ -3,8 +3,8 @@
 - payload는 `source/dataset/event_date/hour` 파티션의 gzip 파일로 append-only 저장한다.
 - 같은 `dedupe_key`가 같은 checksum으로 다시 들어오면 조용히 idempotent skip한다
   (재시작 후 중복 없는 재개).
-- 같은 `dedupe_key`인데 checksum이 다르면 충돌로 보고 새 레코드를 별도로 저장하며
-  `conflict_with`에 원본 raw_record_id를 남긴다(PRD: 충돌 레코드를 조용히 버리지 않는다).
+- 같은 `dedupe_key`인데 checksum이 다르면 충돌로 보고 canonical 레코드를 유지한다.
+  후보 payload는 `RawStoreOutcome.was_conflict=True`로 보고하고 중복 파일·행은 남기지 않는다.
 - checkpoint(cursor)는 소스별로 독립 관리해 한 공급자의 장애가 다른 수집을 막지 않는다.
 """
 
@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import Engine, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from skhy_research.adapters.persistence.schema import ingestion_checkpoint, raw_record_catalog
 from skhy_research.domain.raw_record import RawRecordMeta
@@ -31,7 +32,7 @@ class RawRecordCorruptionError(RuntimeError):
 class RawStoreOutcome:
     meta: RawRecordMeta
     was_duplicate: bool  # True면 기존 레코드를 그대로 반환(idempotent skip)
-    was_conflict: bool  # True면 dedupe_key는 같지만 내용이 달라 새로 저장됨
+    was_conflict: bool  # True면 key는 같지만 내용이 달라 canonical 기존 레코드를 유지함
 
 
 def compute_dedupe_key(
@@ -62,78 +63,9 @@ class RawRecorder:
         provider_sequence: str | None = None,
     ) -> RawStoreOutcome:
         checksum = compute_checksum(payload)
-
-        with self._engine.begin() as conn:
-            existing = conn.execute(
-                select(raw_record_catalog).where(
-                    (raw_record_catalog.c.source == source)
-                    & (raw_record_catalog.c.dataset == dataset)
-                    & (raw_record_catalog.c.dedupe_key == dedupe_key)
-                    & (raw_record_catalog.c.conflict_with.is_(None))
-                )
-            ).mappings().first()
-
-            if existing is not None:
-                if existing["payload_checksum"] == checksum:
-                    self._verify_stored_payload(Path(existing["storage_path"]), checksum)
-                    return RawStoreOutcome(
-                        meta=RawRecordMeta(**dict(existing)), was_duplicate=True, was_conflict=False
-                    )
-                # dedupe_key는 같지만 내용이 다르다 — 충돌. 조용히 버리지 않고 별도 저장.
-                return RawStoreOutcome(
-                    meta=self._write_new_record(
-                        conn,
-                        source,
-                        dataset,
-                        payload,
-                        checksum,
-                        received_at_utc,
-                        collection_run_id,
-                        dedupe_key,
-                        provider_sequence,
-                        conflict_with=existing["raw_record_id"],
-                    ),
-                    was_duplicate=False,
-                    was_conflict=True,
-                )
-
-            return RawStoreOutcome(
-                meta=self._write_new_record(
-                    conn,
-                    source,
-                    dataset,
-                    payload,
-                    checksum,
-                    received_at_utc,
-                    collection_run_id,
-                    dedupe_key,
-                    provider_sequence,
-                    conflict_with=None,
-                ),
-                was_duplicate=False,
-                was_conflict=False,
-            )
-
-    def _write_new_record(
-        self,
-        conn,  # noqa: ANN001 - SQLAlchemy Connection, begin() 블록 내에서만 사용
-        source: str,
-        dataset: str,
-        payload: bytes,
-        checksum: str,
-        received_at_utc: int,
-        collection_run_id: str,
-        dedupe_key: str,
-        provider_sequence: str | None,
-        conflict_with: str | None,
-    ) -> RawRecordMeta:
         raw_record_id = str(uuid.uuid4())
         storage_path = self._partition_path(source, dataset, received_at_utc, raw_record_id)
-        storage_path.parent.mkdir(parents=True, exist_ok=True)
-        with gzip.open(storage_path, "xb") as fh:  # 'x' 모드: 이미 존재하면 실패(불변성 보장)
-            fh.write(payload)
-
-        meta = RawRecordMeta(
+        candidate = RawRecordMeta(
             raw_record_id=raw_record_id,
             source=source,
             dataset=dataset,
@@ -143,23 +75,80 @@ class RawRecorder:
             collection_run_id=collection_run_id,
             provider_sequence=provider_sequence,
             storage_path=str(storage_path),
-            conflict_with=conflict_with,
+            conflict_with=None,
         )
-        conn.execute(
-            insert(raw_record_catalog).values(
-                raw_record_id=meta.raw_record_id,
-                source=meta.source,
-                dataset=meta.dataset,
-                dedupe_key=meta.dedupe_key,
-                payload_checksum=meta.payload_checksum,
-                received_at_utc=meta.received_at_utc,
-                collection_run_id=meta.collection_run_id,
-                provider_sequence=meta.provider_sequence,
-                storage_path=meta.storage_path,
-                conflict_with=meta.conflict_with,
+        self._write_payload_file(storage_path, payload)
+
+        inserted = False
+        existing_meta: RawRecordMeta | None = None
+        try:
+            with self._engine.begin() as conn:
+                inserted = self._insert_candidate(conn, candidate)
+                if not inserted:
+                    existing = conn.execute(
+                        select(raw_record_catalog).where(
+                            (raw_record_catalog.c.source == source)
+                            & (raw_record_catalog.c.dataset == dataset)
+                            & (raw_record_catalog.c.dedupe_key == dedupe_key)
+                        )
+                    ).mappings().one_or_none()
+                    if existing is None:
+                        raise RuntimeError("dedupe 충돌 후 canonical raw 레코드를 찾을 수 없다")
+                    existing_meta = RawRecordMeta(**dict(existing))
+        except Exception:
+            storage_path.unlink(missing_ok=True)
+            raise
+
+        if inserted:
+            return RawStoreOutcome(meta=candidate, was_duplicate=False, was_conflict=False)
+
+        # ON CONFLICT에서 패한 후보 파일은 catalog에 연결되지 않으므로 즉시 제거한다.
+        storage_path.unlink(missing_ok=True)
+        assert existing_meta is not None  # 위 트랜잭션에서 보장됨
+        self._verify_stored_payload(
+            Path(existing_meta.storage_path), existing_meta.payload_checksum
+        )
+        same_payload = existing_meta.payload_checksum == checksum
+        return RawStoreOutcome(
+            meta=existing_meta,
+            was_duplicate=same_payload,
+            was_conflict=not same_payload,
+        )
+
+    def _write_payload_file(self, storage_path: Path, payload: bytes) -> None:
+        storage_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with gzip.open(storage_path, "xb") as fh:  # 'x': 기존 원본 덮어쓰기 금지
+                fh.write(payload)
+        except Exception:
+            storage_path.unlink(missing_ok=True)
+            raise
+
+    def _insert_candidate(self, conn, candidate: RawRecordMeta) -> bool:  # noqa: ANN001
+        statement = (
+            pg_insert(raw_record_catalog)
+            .values(
+                raw_record_id=candidate.raw_record_id,
+                source=candidate.source,
+                dataset=candidate.dataset,
+                dedupe_key=candidate.dedupe_key,
+                payload_checksum=candidate.payload_checksum,
+                received_at_utc=candidate.received_at_utc,
+                collection_run_id=candidate.collection_run_id,
+                provider_sequence=candidate.provider_sequence,
+                storage_path=candidate.storage_path,
+                conflict_with=candidate.conflict_with,
             )
+            .on_conflict_do_nothing(
+                index_elements=(
+                    raw_record_catalog.c.source,
+                    raw_record_catalog.c.dataset,
+                    raw_record_catalog.c.dedupe_key,
+                )
+            )
+            .returning(raw_record_catalog.c.raw_record_id)
         )
-        return meta
+        return conn.execute(statement).scalar_one_or_none() is not None
 
     def _partition_path(
         self, source: str, dataset: str, received_at_utc: int, raw_record_id: str

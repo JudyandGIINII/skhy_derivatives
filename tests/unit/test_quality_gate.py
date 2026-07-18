@@ -52,6 +52,17 @@ def test_duplicate_resubmission_blocks_signal() -> None:
     assert evaluation.blocks_signal is True
 
 
+def test_gap_blocks_signal() -> None:
+    gate = QualityGate(max_gap_ns=5_000_000_000)
+    gate.evaluate_quote(_quote(event_time_utc=_NOW), dedupe_key="dedupe-1")
+    evaluation = gate.evaluate_quote(
+        _quote(event_time_utc=_NOW + 10_000_000_000), dedupe_key="dedupe-2"
+    )
+
+    assert QualityFlag.GAP in evaluation.flags
+    assert evaluation.blocks_signal is True
+
+
 def test_crossed_quote_blocks_signal_even_without_explicit_flag() -> None:
     gate = QualityGate()
     evaluation = gate.evaluate_quote(_quote(bid="101", ask="100"), dedupe_key="dedupe-1")
@@ -80,6 +91,22 @@ def test_cross_source_within_tolerance_does_not_block() -> None:
         primary, secondary, tolerance_pct=Decimal("0.5"), max_time_skew_ns=5_000_000_000
     )
     assert evaluation.blocks_signal is False
+
+
+def test_cross_source_time_skew_marks_stale_and_blocks() -> None:
+    gate = QualityGate()
+    primary = _quote(source="kis", event_time_utc=_NOW)
+    secondary = _quote(source="toss", event_time_utc=_NOW + 10_000_000_000)
+
+    evaluation = gate.evaluate_cross_source(
+        primary,
+        secondary,
+        tolerance_pct=Decimal("0.5"),
+        max_time_skew_ns=5_000_000_000,
+    )
+
+    assert QualityFlag.STALE in evaluation.flags
+    assert evaluation.blocks_signal is True
 
 
 def test_stale_reference_blocks_signal() -> None:

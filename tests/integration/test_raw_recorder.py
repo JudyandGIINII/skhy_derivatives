@@ -5,9 +5,11 @@ from __future__ import annotations
 import gzip
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from sqlalchemy import inspect
 
 from skhy_research.adapters.persistence.raw_recorder import (
     RawRecordCorruptionError,
@@ -79,7 +81,7 @@ def test_reingesting_identical_payload_is_idempotent(clean_pg, tmp_path: Path) -
 
 
 @pytest.mark.integration
-def test_conflicting_payload_with_same_dedupe_key_is_preserved_not_dropped(
+def test_conflicting_payload_with_same_dedupe_key_keeps_canonical_record(
     clean_pg, tmp_path: Path
 ) -> None:
     recorder = _recorder(clean_pg, tmp_path)
@@ -102,14 +104,71 @@ def test_conflicting_payload_with_same_dedupe_key_is_preserved_not_dropped(
     )
 
     assert conflicting.was_conflict is True
-    assert conflicting.meta.raw_record_id != original.meta.raw_record_id
-    assert conflicting.meta.conflict_with == original.meta.raw_record_id
+    assert conflicting.was_duplicate is False
+    assert conflicting.meta.raw_record_id == original.meta.raw_record_id
+    assert conflicting.meta.conflict_with is None
 
-    # 원본 파일은 그대로 보존된다
+    # 원본 파일만 그대로 보존되고 ON CONFLICT에서 패한 후보 파일은 제거된다.
     with gzip.open(Path(original.meta.storage_path), "rb") as fh:
         assert json.loads(fh.read()) == {"close": 203000}
-    with gzip.open(Path(conflicting.meta.storage_path), "rb") as fh:
-        assert json.loads(fh.read()) == {"close": 999999}
+    assert list((tmp_path / "raw").rglob("*.json.gz")) == [Path(original.meta.storage_path)]
+
+
+@pytest.mark.integration
+def test_concurrent_identical_store_keeps_one_catalog_row_and_file(clean_pg, tmp_path: Path) -> None:
+    recorder = _recorder(clean_pg, tmp_path)
+    payload = json.dumps({"close": 203000}).encode("utf-8")
+    dedupe_key = compute_dedupe_key("krx", "daily_ohlcv", "bar", _NOW, "irrelevant")
+
+    def store_once(index: int):
+        return recorder.store(
+            source="krx",
+            dataset="daily_ohlcv",
+            payload=payload,
+            received_at_utc=_NOW,
+            collection_run_id=f"run-{index}",
+            dedupe_key=dedupe_key,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        outcomes = list(executor.map(store_once, range(8)))
+
+    assert len({outcome.meta.raw_record_id for outcome in outcomes}) == 1
+    assert sum(not outcome.was_duplicate for outcome in outcomes) == 1
+    assert len(list((tmp_path / "raw").rglob("*.json.gz"))) == 1
+
+
+@pytest.mark.integration
+def test_database_insert_failure_removes_candidate_file(
+    clean_pg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _recorder(clean_pg, tmp_path)
+
+    def fail_insert(conn, candidate) -> bool:  # noqa: ANN001, ARG001
+        raise RuntimeError("forced insert failure")
+
+    monkeypatch.setattr(recorder, "_insert_candidate", fail_insert)
+
+    with pytest.raises(RuntimeError, match="forced insert failure"):
+        recorder.store(
+            source="krx",
+            dataset="daily_ohlcv",
+            payload=b"{}",
+            received_at_utc=_NOW,
+            collection_run_id="run-fail",
+            dedupe_key="dedupe-fail",
+        )
+
+    assert list(tmp_path.rglob("*.json.gz")) == []
+
+
+@pytest.mark.integration
+def test_raw_catalog_has_database_dedupe_constraint(clean_pg) -> None:
+    constraints = inspect(clean_pg).get_unique_constraints("raw_record_catalog")
+    matching = next(
+        item for item in constraints if item["name"] == "uq_raw_record_source_dataset_dedupe"
+    )
+    assert matching["column_names"] == ["source", "dataset", "dedupe_key"]
 
 
 @pytest.mark.integration

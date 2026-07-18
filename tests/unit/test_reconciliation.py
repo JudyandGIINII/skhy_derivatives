@@ -9,6 +9,7 @@ import pytest
 from skhy_research.data.reconciliation.divergence import (
     check_source_divergence,
     check_stale_reference,
+    source_time_skew_exceeds,
 )
 from skhy_research.domain.enums import AdjustmentStatus, Currency, Session, Venue
 from skhy_research.domain.market import MarketQuote
@@ -64,7 +65,16 @@ def test_divergence_check_skips_comparison_beyond_time_skew() -> None:
         "toss", "SKHY_000660_KRX_COMMON", "999999999", event_time_utc=_NOW + 100_000_000_000
     )  # 100초 뒤, 큰 차이지만 동기화 범위 밖
 
+    assert source_time_skew_exceeds(primary, secondary, max_time_skew_ns=5_000_000_000) is True
     assert check_source_divergence(primary, secondary, Decimal("0.5"), max_time_skew_ns=5_000_000_000) is False
+
+
+def test_negative_time_skew_limit_is_rejected() -> None:
+    primary = _quote("kis", "SKHY_000660_KRX_COMMON", "100000")
+    secondary = _quote("toss", "SKHY_000660_KRX_COMMON", "100000")
+
+    with pytest.raises(ValueError, match="max_time_skew_ns"):
+        source_time_skew_exceeds(primary, secondary, max_time_skew_ns=-1)
 
 
 def test_stale_reference_true_when_older_than_max_age() -> None:

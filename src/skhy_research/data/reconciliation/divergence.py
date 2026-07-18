@@ -7,6 +7,19 @@ from decimal import Decimal
 from skhy_research.domain.market import MarketQuote
 
 
+def source_time_skew_exceeds(
+    primary: MarketQuote,
+    secondary: MarketQuote,
+    max_time_skew_ns: int,
+) -> bool:
+    """두 공급자 quote가 안전하게 비교 가능한 시간 범위를 벗어났는지 판정한다."""
+    if primary.instrument_id != secondary.instrument_id:
+        raise ValueError("서로 다른 instrument_id는 대조할 수 없다")
+    if max_time_skew_ns < 0:
+        raise ValueError("max_time_skew_ns는 음수일 수 없다")
+    return abs(primary.event_time_utc - secondary.event_time_utc) > max_time_skew_ns
+
+
 def check_source_divergence(
     primary: MarketQuote,
     secondary: MarketQuote,
@@ -14,11 +27,9 @@ def check_source_divergence(
     max_time_skew_ns: int,
 ) -> bool:
     """동기화 허용범위 안에서 두 공급자 mid price 차이가 허용치를 넘으면 True."""
-    if primary.instrument_id != secondary.instrument_id:
-        raise ValueError("서로 다른 instrument_id는 대조할 수 없다")
-    time_skew = abs(primary.event_time_utc - secondary.event_time_utc)
-    if time_skew > max_time_skew_ns:
-        # 동기화 허용범위 밖이면 비교 자체가 무의미하다 — stale_reference 판단으로 넘긴다.
+    if source_time_skew_exceeds(primary, secondary, max_time_skew_ns):
+        # 동기화 허용범위 밖이면 가격 괴리를 계산하지 않는다. 호출자는 이 결과와
+        # 별도로 STALE을 부여해 비교 쌍 전체를 차단해야 한다.
         return False
     primary_mid = (primary.bid_price + primary.ask_price) / 2
     secondary_mid = (secondary.bid_price + secondary.ask_price) / 2
