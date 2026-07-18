@@ -18,9 +18,11 @@ uv.lock.tmp
 .env
 *.env.local
 
-# local runtime state and data (Git 제외 대상, PRD 3장 구조)
-var/
-data/
+# local runtime state and data (Git 제외 대상, PRD 3장 구조).
+# 저장소 최상위 디렉터리만 가리키도록 반드시 절대경로(/)로 앵커링한다.
+# 앵커링하지 않으면 src/skhy_research/data/ 같은 소스 패키지까지 무시된다.
+/var/
+/data/
 
 # db
 *.duckdb
