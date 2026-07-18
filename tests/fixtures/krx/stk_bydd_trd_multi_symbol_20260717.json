@@ -1,0 +1,24 @@
+{
+  "OutBlock_1": [
+    {
+      "BAS_DD": "20260717",
+      "ISU_CD": "000660",
+      "TDD_OPNPRC": "495000",
+      "TDD_HGPRC": "510000",
+      "TDD_LWPRC": "490000",
+      "TDD_CLSPRC": "500000",
+      "ACC_TRDVOL": "1234567",
+      "ACC_TRDVAL": "617283500000"
+    },
+    {
+      "BAS_DD": "20260717",
+      "ISU_CD": "005930",
+      "TDD_OPNPRC": "85000",
+      "TDD_HGPRC": "87000",
+      "TDD_LWPRC": "84500",
+      "TDD_CLSPRC": "86500",
+      "ACC_TRDVOL": "9876543",
+      "ACC_TRDVAL": "854320969500"
+    }
+  ]
+}

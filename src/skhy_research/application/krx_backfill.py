@@ -43,6 +43,18 @@ class BackfillGateBlockedError(RuntimeError):
     """필수 데이터·universe gate가 해소되지 않아 백필을 시작할 수 없음."""
 
 
+def assert_backfill_gates(gate_registry: GateRegistry, gate_as_of_utc: int) -> None:
+    """실 API 호출 전에 G-04/G-06을 fail-closed로 확인한다."""
+
+    blocked_gates = [
+        gate_id for gate_id in ("G-04", "G-06") if gate_registry.blocks(gate_id, gate_as_of_utc)
+    ]
+    if blocked_gates:
+        raise BackfillGateBlockedError(
+            f"KRX 백필 차단: CONFIRMED가 아닌 필수 gate={blocked_gates}"
+        )
+
+
 def backfill_daily_bars(
     registry: ProviderRegistry,
     calendar_resolver: CalendarResolver,
@@ -59,13 +71,7 @@ def backfill_daily_bars(
     secondary_provider_name: str | None = None,
     close_tolerance_pct: Decimal = Decimal("0.5"),
 ) -> BackfillResult:
-    blocked_gates = [
-        gate_id for gate_id in ("G-04", "G-06") if gate_registry.blocks(gate_id, gate_as_of_utc)
-    ]
-    if blocked_gates:
-        raise BackfillGateBlockedError(
-            f"KRX 백필 차단: CONFIRMED가 아닌 필수 gate={blocked_gates}"
-        )
+    assert_backfill_gates(gate_registry, gate_as_of_utc)
 
     primary = registry.get_historical_data(primary_provider_name)
     bars = primary.get_bars(instrument_id, "1d", start_utc, end_utc, AdjustmentStatus.RAW)
