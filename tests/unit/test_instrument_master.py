@@ -11,7 +11,7 @@ from skhy_research.application.instrument_master import (
     InstrumentMaster,
     UnresolvedInstrumentError,
 )
-from skhy_research.domain.enums import Venue
+from skhy_research.domain.enums import AssetClass, Venue
 from skhy_research.domain.instrument import CorporateActionRecord, InstrumentRecord, SymbolAlias
 
 _T0 = 1_700_000_000_000_000_000
@@ -22,7 +22,7 @@ _T2 = 1_800_000_000_000_000_000
 def _instrument(instrument_id: str = "SKHY_000660_COMMON") -> InstrumentRecord:
     return InstrumentRecord(
         instrument_id=instrument_id,
-        asset_class="COMMON_STOCK",
+        asset_class=AssetClass.COMMON_STOCK,
         primary_venue=Venue.KRX,
         display_name="SK hynix",
         is_active=True,
@@ -135,7 +135,7 @@ def test_is_active_as_of_respects_listing_and_delisting() -> None:
     master = InstrumentMaster()
     instrument = InstrumentRecord(
         instrument_id="DELISTED_ETN",
-        asset_class="LEVERAGED_ETN",
+        asset_class=AssetClass.LEVERAGED_ETN,
         primary_venue=Venue.KRX,
         display_name="temp",
         is_active=False,

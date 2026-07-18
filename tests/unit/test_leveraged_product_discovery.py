@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from skhy_research.application.fund_snapshot_collection import discover_leveraged_products
 from skhy_research.application.instrument_master import InstrumentMaster
-from skhy_research.domain.enums import Venue
+from skhy_research.domain.enums import AssetClass, Venue
 from skhy_research.domain.instrument import InstrumentRecord
 
 _T0 = 1_700_000_000_000_000_000
@@ -16,7 +16,7 @@ def test_discovers_only_active_leveraged_asset_classes() -> None:
     master.register_instrument(
         InstrumentRecord(
             instrument_id="COMMON",
-            asset_class="COMMON_STOCK",
+            asset_class=AssetClass.COMMON_STOCK,
             primary_venue=Venue.KRX,
             display_name="본주",
             is_active=True,
@@ -26,7 +26,7 @@ def test_discovers_only_active_leveraged_asset_classes() -> None:
     master.register_instrument(
         InstrumentRecord(
             instrument_id="LEV_ETF",
-            asset_class="LEVERAGED_ETF",
+            asset_class=AssetClass.LEVERAGED_ETF,
             primary_venue=Venue.KRX,
             display_name="레버리지 ETF",
             is_active=True,
@@ -36,7 +36,7 @@ def test_discovers_only_active_leveraged_asset_classes() -> None:
     master.register_instrument(
         InstrumentRecord(
             instrument_id="HKEX_SWAP",
-            asset_class="SWAP_PRODUCT",
+            asset_class=AssetClass.SWAP_PRODUCT,
             primary_venue=Venue.HKEX,
             display_name="HKEX 7709",
             is_active=True,
@@ -46,7 +46,7 @@ def test_discovers_only_active_leveraged_asset_classes() -> None:
     master.register_instrument(
         InstrumentRecord(
             instrument_id="DELISTED_ETN",
-            asset_class="LEVERAGED_ETN",
+            asset_class=AssetClass.LEVERAGED_ETN,
             primary_venue=Venue.KRX,
             display_name="상장폐지된 ETN",
             is_active=False,
@@ -65,7 +65,7 @@ def test_discovers_empty_when_no_leveraged_products_registered() -> None:
     master.register_instrument(
         InstrumentRecord(
             instrument_id="COMMON",
-            asset_class="COMMON_STOCK",
+            asset_class=AssetClass.COMMON_STOCK,
             primary_venue=Venue.KRX,
             display_name="본주",
             is_active=True,

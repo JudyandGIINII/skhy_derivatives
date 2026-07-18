@@ -22,6 +22,21 @@ class Venue(StrEnum):
     REFERENCE = "REFERENCE"
 
 
+class AssetClass(StrEnum):
+    COMMON_STOCK = "COMMON_STOCK"
+    ADR = "ADR"
+    LEVERAGED_ETF = "LEVERAGED_ETF"
+    LEVERAGED_ETN = "LEVERAGED_ETN"
+    SWAP_PRODUCT = "SWAP_PRODUCT"
+    STOCK_FUTURE = "STOCK_FUTURE"
+    FX = "FX"
+
+
+LEVERAGED_ASSET_CLASSES = frozenset(
+    {AssetClass.LEVERAGED_ETF, AssetClass.LEVERAGED_ETN, AssetClass.SWAP_PRODUCT}
+)
+
+
 class Session(StrEnum):
     PRE = "PRE"
     REGULAR = "REGULAR"

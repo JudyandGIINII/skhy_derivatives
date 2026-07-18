@@ -22,6 +22,8 @@ from skhy_research.ports.secrets import SecretProvider
 _PROVIDER_NAME = "krx"
 _DEFAULT_BASE_URL = "https://data-dbg.krx.co.kr"
 _DAILY_STOCK_PATH = "/svc/apis/sto/stk_bydd_trd"
+_DAILY_ETF_PATH = "/svc/apis/etp/etf_bydd_trd"
+_DAILY_ETN_PATH = "/svc/apis/etp/etn_bydd_trd"
 _SEOUL = ZoneInfo("Asia/Seoul")
 
 
@@ -53,8 +55,10 @@ class KrxReadOnlyClient:
         return ProviderCatalogEntry(
             provider_name=_PROVIDER_NAME,
             port_type="historical_data",
-            catalog_version="krx-historical-data-v1",
-            capabilities=frozenset({ProviderCapability.HISTORICAL_BARS}),
+            catalog_version="krx-historical-data-v2",
+            capabilities=frozenset(
+                {ProviderCapability.HISTORICAL_BARS, ProviderCapability.INSTRUMENT_MASTER}
+            ),
             license_terms_url="https://openapi.krx.co.kr/contents/OPP/INFO/service/OPPINFO004.cmd",
             storage_redistribution_allowed=False,
             last_verified_at_utc=time.time_ns(),
@@ -62,11 +66,24 @@ class KrxReadOnlyClient:
         )
 
     def fetch_daily_stock_trades(self, trading_date: date) -> list[dict[str, Any]]:
+        return self._fetch_daily_records(_DAILY_STOCK_PATH, trading_date)
+
+    def fetch_daily_etf_trades(self, trading_date: date) -> list[dict[str, Any]]:
+        """ETF 일별매매정보 원문을 조회한다 (`/svc/apis/etp/etf_bydd_trd`)."""
+        return self._fetch_daily_records(_DAILY_ETF_PATH, trading_date)
+
+    def fetch_daily_etn_trades(self, trading_date: date) -> list[dict[str, Any]]:
+        """ETN 일별매매정보 원문을 조회한다 (`/svc/apis/etp/etn_bydd_trd`)."""
+        return self._fetch_daily_records(_DAILY_ETN_PATH, trading_date)
+
+    def _fetch_daily_records(
+        self, endpoint_path: str, trading_date: date
+    ) -> list[dict[str, Any]]:
         api_key = require_secret(self._secret_provider, _PROVIDER_NAME, "KRX_API_KEY")
         payload = request_json(
             _PROVIDER_NAME,
             lambda: self._client.get(
-                f"{self._base_url}{_DAILY_STOCK_PATH}",
+                f"{self._base_url}{endpoint_path}",
                 headers={"AUTH_KEY": api_key, "Accept": "application/json"},
                 params={"basDd": trading_date.strftime("%Y%m%d")},
             ),

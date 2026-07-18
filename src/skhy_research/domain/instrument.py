@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from skhy_research.domain.enums import Venue
+from skhy_research.domain.enums import AssetClass, Venue
 from skhy_research.domain.market import EpochNanos
 
 
@@ -20,7 +20,7 @@ class InstrumentRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     instrument_id: str
-    asset_class: str  # COMMON_STOCK|ADR|LEVERAGED_ETF|LEVERAGED_ETN|SWAP_PRODUCT|STOCK_FUTURE|FX
+    asset_class: AssetClass
     primary_venue: Venue
     display_name: str
     is_active: bool

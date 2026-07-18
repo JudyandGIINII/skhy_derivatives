@@ -11,11 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from skhy_research.application.instrument_master import InstrumentMaster
+from skhy_research.domain.enums import LEVERAGED_ASSET_CLASSES
 from skhy_research.domain.reference import FundSnapshot
 from skhy_research.ports.errors import UnsupportedCapabilityError
 from skhy_research.ports.reference_data import ReferenceDataProvider
-
-LEVERAGED_ASSET_CLASSES = frozenset({"LEVERAGED_ETF", "LEVERAGED_ETN", "SWAP_PRODUCT"})
 
 
 def discover_leveraged_products(master: InstrumentMaster, as_of_utc: int) -> list[str]:

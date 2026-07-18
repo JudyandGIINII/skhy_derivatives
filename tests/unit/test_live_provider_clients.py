@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, time
 from decimal import Decimal
+from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
@@ -70,6 +72,52 @@ def test_krx_daily_stock_request_uses_auth_header_and_bas_date() -> None:
 
     assert records[0]["ISU_CD"] == "000660"
     assert client.capabilities().supports(ProviderCapability.HISTORICAL_BARS)
+    assert secrets.requested_names == ["KRX_API_KEY"]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "expected_path", "fixture_name", "expected_symbol"),
+    (
+        (
+            "fetch_daily_etf_trades",
+            "/svc/apis/etp/etf_bydd_trd",
+            "etf_daily_20260716.json",
+            "0193T0",
+        ),
+        (
+            "fetch_daily_etn_trades",
+            "/svc/apis/etp/etn_bydd_trd",
+            "etn_daily_20260716.json",
+            "520101",
+        ),
+    ),
+)
+def test_krx_etp_daily_request_uses_verified_path_auth_and_bas_date(
+    method_name: str,
+    expected_path: str,
+    fixture_name: str,
+    expected_symbol: str,
+) -> None:
+    secrets = _RecordingSecrets({"KRX_API_KEY": "krx-test-secret"})
+    fixture_path = Path(__file__).parents[1] / "fixtures" / "krx" / fixture_name
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == expected_path
+        assert request.url.params["basDd"] == "20260716"
+        assert request.headers["AUTH_KEY"] == "krx-test-secret"
+        return httpx.Response(200, json=payload)
+
+    client = KrxReadOnlyClient(
+        secrets,
+        http_client=_http_client(handler),
+        base_url="https://krx.test",
+    )
+    records = getattr(client, method_name)(date(2026, 7, 16))
+
+    assert records[0]["ISU_CD"] == expected_symbol
+    assert client.capabilities().supports(ProviderCapability.INSTRUMENT_MASTER)
     assert secrets.requested_names == ["KRX_API_KEY"]
 
 
