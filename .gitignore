@@ -1,1 +1,27 @@
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# uv
+uv.lock.tmp
+
+# secrets
+.env
+*.env.local
+
+# local runtime state and data (Git 제외 대상, PRD 3장 구조)
+var/
+data/
+
+# db
+*.duckdb
+*.db

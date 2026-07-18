@@ -1,0 +1,79 @@
+[project]
+name = "skhy-research"
+version = "0.1.0"
+description = "SK하이닉스 구조적 수급·교차시장 상대가치 연구 시스템"
+authors = [
+    { name = "judythemuddy" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.9",
+    "httpx>=0.27",
+    "websockets>=13.0",
+    "tenacity>=9.0",
+    "pyarrow>=17.0",
+    "polars>=1.9",
+    "duckdb>=1.1",
+    "psycopg[binary]>=3.2",
+    "sqlalchemy>=2.0",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "statsmodels>=0.14",
+    "scikit-learn>=1.5",
+    "typer>=0.13",
+    "apscheduler>=3.10",
+    "jinja2>=3.1",
+    "plotly>=5.24",
+    "streamlit>=1.39",
+    "python-dotenv>=1.0",
+    "keyring>=25.4",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+skhy-research = "skhy_research.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.29,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+    "hypothesis>=6.112",
+    "respx>=0.21",
+    "time-machine>=2.15",
+    "ruff>=0.7",
+    "pyright>=1.1.383",
+]
+smoke = [
+    "pytest>=8.3",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+ignore = ["E501"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "contract: 공급자 계약 테스트 (fixture 기반, 네트워크 차단)",
+    "property: property-based 테스트",
+    "replay: 결정론적 이벤트 재생 테스트",
+    "e2e: 통합·E2E 테스트",
+    "smoke: 실제 API 조회 전용 smoke 테스트 (사용자 키 주입 환경 전용, 기본 비활성)",
+]
+addopts = "-m 'not smoke'"
+
+[tool.coverage.run]
+source = ["src/skhy_research"]

@@ -1,0 +1,4 @@
+# 로컬 개발 환경 override. base.yaml의 값을 상속하고 명시된 키만 덮어쓴다.
+database_url_env: SKHY_DATABASE_URL
+data_root: "./data"
+var_root: "./var"
