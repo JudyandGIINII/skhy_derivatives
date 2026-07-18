@@ -221,6 +221,166 @@ def krx_backfill_command(
         engine.dispose()
 
 
+@app.command("backfill-etp")
+def krx_etp_backfill_command(
+    ctx: typer.Context,
+    trading_days: int | None = typer.Option(
+        None,
+        "--trading-days",
+        min=1,
+        help="기초자산 catalog의 최신 KRX 거래일 수. 기본값은 h1.min_krx_trading_days",
+    ),
+    pace_seconds: float = typer.Option(
+        0.2,
+        "--pace-seconds",
+        min=0.0,
+        help="KRX ETF/ETN GET 사이 최소 지연(초)",
+    ),
+    max_rate_limit_retries: int = typer.Option(
+        4,
+        "--max-rate-limit-retries",
+        min=0,
+        help="ProviderRateLimitError 최대 재시도 수",
+    ),
+) -> None:
+    """daily-proxy용 KRX ETF/ETN NAV·IV·상장좌수를 read-only 백필한다."""
+
+    from skhy_research.adapters.persistence.db import build_engine
+    from skhy_research.adapters.persistence.schema import init_schema
+    from skhy_research.adapters.providers.krx import KrxReadOnlyClient
+    from skhy_research.adapters.secrets.factory import build_secret_provider
+    from skhy_research.application.h1_daily_proxy_walk_forward import (
+        load_latest_krx_daily_bars,
+    )
+    from skhy_research.application.krx_etp_backfill_runner import execute_krx_etp_backfill
+
+    settings: Settings = ctx.obj
+    minimum = trading_days or settings.h1.min_krx_trading_days
+    engine = build_engine(settings)
+    init_schema(engine)
+    client = KrxReadOnlyClient(build_secret_provider())
+    try:
+        bars = load_latest_krx_daily_bars(engine, trading_days=minimum)
+        result = execute_krx_etp_backfill(
+            engine=engine,
+            data_root=settings.data_root,
+            client=client,
+            trading_dates=(item.trading_date for item in bars),
+            min_request_interval_seconds=pace_seconds,
+            max_rate_limit_retries=max_rate_limit_retries,
+        )
+        typer.echo("--- KRX ETP daily-proxy 입력 백필 ---")
+        typer.echo(f"run_id={result.collection_run_id}")
+        typer.echo(
+            f"range={result.trading_dates[0].isoformat()}.."
+            f"{result.trading_dates[-1].isoformat()} trading_days={len(result.trading_dates)}"
+        )
+        typer.echo(
+            f"raw_inserted={result.raw_inserted_count} "
+            f"raw_duplicate={result.raw_duplicate_count} "
+            f"normalized_inserted={result.normalized_inserted_count} "
+            f"normalized_duplicate={result.normalized_duplicate_count}"
+        )
+        typer.echo(
+            f"product_observations={result.product_observation_count} "
+            f"excluded={result.excluded_observation_count} "
+            f"symbols={list(result.product_symbols)}"
+        )
+    finally:
+        client.close()
+        engine.dispose()
+
+
+@app.command("backtest")
+def h1_daily_proxy_backtest_command(
+    ctx: typer.Context,
+    seed: int = typer.Option(7, "--seed", help="bootstrap·permutation·engine 결정론 seed"),
+    trading_days: int | None = typer.Option(
+        None,
+        "--trading-days",
+        min=1,
+        help="최신 KRX 거래일 수. 기본값은 h1.min_krx_trading_days",
+    ),
+    kappa: str = typer.Option("0.10", "--kappa", help="명시적 daily-proxy 전이계수"),
+    neutral_band: str = typer.Option(
+        "0.001", "--neutral-band", help="daily-proxy 무신호 중립 구간"
+    ),
+    bootstrap_resamples: int = typer.Option(
+        1000, "--bootstrap-resamples", min=1, help="기대값 bootstrap 재표본 횟수"
+    ),
+    permutations: int = typer.Option(
+        1000, "--permutations", min=1, help="날짜 부호 permutation 횟수"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="결과를 JSON으로 출력"),
+) -> None:
+    """실 KRX daily-proxy의 60/30/30·walk-forward 연구 백테스트를 실행한다."""
+
+    import json
+
+    from skhy_research.adapters.persistence.db import build_engine
+    from skhy_research.adapters.persistence.schema import init_schema
+    from skhy_research.application.h1_daily_proxy_walk_forward import (
+        DailyProxyBacktestConfig,
+        run_h1_daily_proxy_walk_forward,
+    )
+
+    settings: Settings = ctx.obj
+    config = DailyProxyBacktestConfig(
+        seed=seed,
+        trading_days=trading_days or settings.h1.min_krx_trading_days,
+        kappa=_parse_nonnegative_decimal(kappa, "--kappa"),
+        neutral_band=_parse_nonnegative_decimal(neutral_band, "--neutral-band"),
+        bootstrap_resamples=bootstrap_resamples,
+        permutation_count=permutations,
+    )
+    engine = build_engine(settings)
+    init_schema(engine)
+    try:
+        result = run_h1_daily_proxy_walk_forward(engine, settings, config)
+    finally:
+        engine.dispose()
+
+    if json_output:
+        typer.echo(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
+    typer.echo("--- H1 KRX daily-proxy walk-forward ---")
+    typer.echo(
+        f"model={result.promotion.model_version} scope={result.promotion.promotion_scope} "
+        f"promotion_eligible={result.promotion.promotion_eligible}"
+    )
+    typer.echo(
+        f"bars={result.bar_count} etp_snapshots={result.etp_snapshot_count} "
+        f"features={result.available_feature_count}"
+    )
+    for split in result.chronological_splits:
+        typer.echo(f"split {split.name}: {split.start.isoformat()}..{split.end.isoformat()}")
+    for fold in result.folds:
+        typer.echo(
+            f"fold={fold.fold_number} train={fold.train.start.isoformat()}.."
+            f"{fold.train.end.isoformat()} test={fold.test.start.isoformat()}.."
+            f"{fold.test.end.isoformat()} trades={fold.base.trade_count} "
+            f"base_expectancy={fold.base.expectancy} base_pf={fold.base.profit_factor} "
+            f"base_mdd={fold.base.max_drawdown} "
+            f"stress_pnl={fold.stress_2x.cumulative_pnl} "
+            f"ci={fold.base.bootstrap_expectancy_ci} "
+            f"permutation_p={fold.base.permutation_p_value}"
+        )
+    typer.echo(
+        f"aggregate trades={result.aggregate_base.trade_count} "
+        f"base_pnl={result.aggregate_base.cumulative_pnl} "
+        f"base_expectancy={result.aggregate_base.expectancy} "
+        f"base_pf={result.aggregate_base.profit_factor} "
+        f"base_mdd={result.aggregate_base.max_drawdown} "
+        f"stress_2x_pnl={result.aggregate_stress_2x.cumulative_pnl}"
+    )
+    typer.echo(
+        f"promotion={result.promotion.verdict.value} reasons={list(result.promotion.reasons)}"
+    )
+    typer.echo(f"data_snapshot_hash={result.data_snapshot_hash}")
+    typer.echo(f"result_hash={result.result_hash}")
+
+
 def _parse_end_date(value: str | None) -> date:
     if value is None:
         return datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=1)

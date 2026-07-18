@@ -2,29 +2,32 @@
 
 | # | 완료조건 | 상태 | 근거 |
 | --- | --- | --- | --- |
-| 1 | 신뢰 가능한 H1 데이터가 최소 120 KRX 거래일이며 60/30/30 시간순 분할과 이후 walk-forward 결과가 재현된다 | ⚠️ 메커니즘만 충족 (실데이터 보류) | 파이프라인은 `tests/integration/test_krx_backfill_pipeline.py`(120거래일 합성 데이터)와 `tests/unit/test_time_splits.py`(60/30/30, walk-forward)로 실증. 사람용 G-04/G-06은 `CONFIRMED`지만 유효한 PostgreSQL 결정 저장과 실제 KRX 120거래일 백필은 아직 필요 |
+| 1 | 신뢰 가능한 H1 데이터가 최소 120 KRX 거래일이며 60/30/30 시간순 분할과 이후 walk-forward 결과가 재현된다 | ✅ daily-proxy 연구 완료 | 2026-07-18 dev DB의 실제 KRX `000660` 120거래일(2026-01-20~07-16)과 ETP NAV/IV·상장좌수 315 snapshot으로 `skhy-research backtest`를 2회 실행. 두 번 모두 data hash `3f8edad2…e946`, result hash `ab71cd76…2e88` 일치 |
 | 2 | 15:10 시점 신호에 사후 공개 AUM/NAV가 포함되지 않았다는 lineage 감사가 통과한다 | ✅ 충족 | `tests/e2e/test_h1_lookahead_lineage_audit.py`: 정상 케이스(전일 공개 NAV)는 raw→normalized→signal lineage로 역추적되고, 위반 케이스(당일 장후 확정 NAV)는 `LookaheadViolationError`로 신호·lineage 자체가 생성되지 않음을 실증 |
-| 3 | 기본 비용과 각 비용 2배 결과, 집중도, 신뢰구간, 반증 지표를 포함한 리포트로 H1을 PASS/HOLD/REJECT로 판정한다 | ✅ 메커니즘 충족 | `experiments/statistics.py`(기대값·PF·MDD·집중도·bootstrap CI·permutation), `engine/cost_model.py`(`CostBreakdown.stressed(2x)`), `experiments/promotion.py`(PASS/HOLD/REJECT). `tests/e2e/test_h1_pipeline_end_to_end.py`가 feature→strategy→체결→통계→판정 전체 배선을 실증(합성 데이터로 PASS 판정까지 도달) |
+| 3 | 기본 비용과 각 비용 2배 결과, 집중도, 신뢰구간, 반증 지표를 포함한 리포트로 H1을 PASS/HOLD/REJECT로 판정한다 | ✅ daily-proxy 실데이터 충족 | `application/h1_daily_proxy_walk_forward.py`가 feature→event engine 왕복체결→기본/2배 비용→기대값·PF·MDD·집중도·bootstrap CI·permutation→promotion을 연결. 실제 32거래 결과는 daily-proxy 승격 비대상 정책에 따라 `HOLD`이며 원 H1 성과와 합치지 않음 |
 | 4 | G-03 미확정이면 완전모델을 가장하지 않고 축소모델 버전과 품질 경고를 명시한다 | ✅ 충족 | `features/h1_close_pressure/close_pressure.py`: `observable_flow_adjustment`가 결측이면 `model_version="reduced"`로 낮추고 결측 상품을 `missing_flow_fund_ids`에 남김(`tests/unit/test_h1_close_pressure.py`). G-03은 여전히 `UNKNOWN` |
 
-## 조건 1이 보류인 이유와 해소 경로
+## 실데이터 daily-proxy 실행 결과
 
-백필 파이프라인(`application/krx_backfill.py`, `application/parquet_snapshot.py`,
-`application/trading_day_coverage.py`)과 시간순 분할(`experiments/splits.py`)은
-모두 구현·테스트됐고 120거래일 분량의 합성 데이터로 정합성을 실증했다. 축소 G-04는
-무료 KRX 일별 universe·listed-notional proxy·가용성·lineage 범위로 확정됐지만, 실제
-120거래일 백필과 DB gate 결정 저장은 실행하지 않았으므로 실데이터 완료조건은 보류다.
-
-해소 경로:
-
-1. 확정된 G-04/G-06 `GateDecision`을 PostgreSQL에 저장하고 아래 로더로
-   runtime `GateRegistry`를 구성한다.
-2. `application.krx_backfill.backfill_daily_bars()`로 실제 120거래일 이상을
-   백필하고 `trading_day_coverage.verify_trading_day_coverage()`로 커버리지를
-   확인한다.
-3. `experiments/splits.chronological_split()`로 실제 데이터를 60/30/30
-   분할하고, H1 전략을 학습·검증까지만 튜닝한 뒤
-   `experiments/test_set_seal.SplitContaminationGuard`로 test 구간을 봉인한다.
+- 기초자산: 실제 KRX `000660` Bar 120거래일, 2026-01-20~2026-07-16.
+- ETP: ETF/ETN endpoint를 거래일·endpoint별 한 번씩 read-only 호출해 raw 240건과
+  `KrxEtpDailySnapshot` 315건을 append-only 저장했다. 9개 상품의 최초 관측일은
+  2026-05-27이며, 상장 전 날짜에는 snapshot을 소급 생성하지 않았다.
+- 고정 연구 파라미터: `kappa=0.10`, neutral band `0.001`, seed `7`. kappa는 test 결과를
+  보고 조정하지 않았으며 결과에는 `explicit-fixed-research-parameter`로 기록된다.
+- 60/30/30: train 2026-01-20~04-17, validation 04-20~06-04, test 06-05~07-16.
+- anchored walk-forward: fold 1은 위 train→validation 구간(3거래), fold 2는
+  2026-01-20~06-04 확장 train→06-05~07-16 test(29거래)다.
+- 체결은 실제 KRX daily Bar의 시가·종가를 연구용 quote event로 재생한 paper 체결이다.
+  15:10 실시간 호가나 실행 가능성 증거로 승격하지 않는다.
+- 집계 base: 32거래, PnL -950,340.9162원, expectancy -29,698.1536원,
+  PF 0.53337, MDD 1,147,494.6579원(초기자본 대비 11.47495%), expectancy 95% bootstrap
+  CI [-72,603.8359, 10,811.0574], permutation p=0.911.
+- 집계 2배 비용: PnL -1,113,681.8323원, expectancy -34,802.5573원,
+  PF 0.47807, MDD 1,290,989.3159원(12.90989%).
+- 판정: `h1_krx_daily_proxy_reduced_v1`은 `promotion_eligible=False`, resolution
+  `daily-proxy`, scope `h1-daily-proxy-research-only`이므로 성과와 무관하게 `HOLD`다.
+  원래 15:10 H1(`h1-original`)의 PASS/REJECT 근거로 병합하지 않는다.
 
 ## 런타임 gate 결정 로드
 
@@ -50,8 +53,8 @@ result = backfill_daily_bars(
 로더는 `GateRegistry.record_decision()`을 그대로 통과하므로 `CONFIRMED` 행에 URL,
 SHA-256 checksum, 결론, 담당 provider, 확인시각, 유효기간이 없거나 시간 범위가
 잘못되면 시작 단계에서 거부한다. 사람용 G-04는 축소 범위에서 `CONFIRMED`지만 문서가
-DB journal을 대신하지 않으므로, 검토된 G-04/G-06 결정 행이 저장되기 전까지 실제 백필
-차단을 유지한다.
+DB journal을 대신하지 않는다. 2026-07-18 실행에서는 검토된 G-04/G-06 결정 행이 dev DB에
+저장되어 실제 백필 gate를 통과했으며, 결정이 없거나 만료된 다른 환경에서는 계속 차단한다.
 
 ## 재현 명령
 
@@ -63,4 +66,13 @@ uv run pytest tests/e2e/test_h1_lookahead_lineage_audit.py -v
 uv run pytest tests/e2e/test_h1_pipeline_end_to_end.py -v
 uv run pytest tests/integration/test_gate_decision_store.py -v
 uv run pytest tests/integration/test_krx_backfill_pipeline.py -v
+
+SKHY_SECRET_BACKEND=keychain \
+SKHY_DATABASE_URL=postgresql+psycopg://skhy:skhy_local_dev@localhost:5432/skhy_research \
+uv run skhy-research backfill-etp --trading-days 120 --pace-seconds 0.25
+
+SKHY_SECRET_BACKEND=keychain \
+SKHY_DATABASE_URL=postgresql+psycopg://skhy:skhy_local_dev@localhost:5432/skhy_research \
+uv run skhy-research backtest --seed 7 --trading-days 120 --kappa 0.10 \
+  --neutral-band 0.001 --bootstrap-resamples 1000 --permutations 1000 --json
 ```
