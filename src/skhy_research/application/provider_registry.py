@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from skhy_research.domain.provider_capability import ProviderCatalogEntry
 from skhy_research.ports.broker import BrokerProvider
 from skhy_research.ports.historical_data import HistoricalDataProvider
@@ -15,6 +17,8 @@ from skhy_research.ports.market_data import MarketDataProvider
 from skhy_research.ports.reference_data import ReferenceDataProvider
 
 _ALLOWED_BROKER_NAME = "paper"
+
+AnyProvider = MarketDataProvider | ReferenceDataProvider | HistoricalDataProvider | BrokerProvider
 
 
 class NonPaperBrokerRegistrationError(RuntimeError):
@@ -91,9 +95,15 @@ class ProviderRegistry:
 
     # --- catalog 조회 (FR-02) ---
     def full_catalog(self) -> list[ProviderCatalogEntry]:
-        entries = [p.capabilities() for p in self._market_data.values()]
-        entries += [p.capabilities() for p in self._reference_data.values()]
-        entries += [p.capabilities() for p in self._historical_data.values()]
-        if self._broker is not None:
-            entries.append(self._broker.capabilities())
-        return entries
+        return [provider.capabilities() for _, _, provider in self.iter_providers()]
+
+    def iter_providers(self) -> Iterator[tuple[str, str, AnyProvider]]:
+        """(port_type, provider_name, provider) 삼중항을 순회한다. capability probe·건강상태 점검용."""
+        for name, provider in self._market_data.items():
+            yield ("market_data", name, provider)
+        for name, provider in self._reference_data.items():
+            yield ("reference_data", name, provider)
+        for name, provider in self._historical_data.items():
+            yield ("historical_data", name, provider)
+        if self._broker is not None and self._broker_name is not None:
+            yield ("broker", self._broker_name, self._broker)
