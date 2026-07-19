@@ -9,6 +9,8 @@ from __future__ import annotations
 import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 import typer
@@ -379,6 +381,86 @@ def h1_daily_proxy_backtest_command(
     )
     typer.echo(f"data_snapshot_hash={result.data_snapshot_hash}")
     typer.echo(f"result_hash={result.result_hash}")
+
+
+@app.command("prefalsification-study")
+def h1_prefalsification_study_command(
+    ctx: typer.Context,
+    input_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--input-json",
+            help="lineage·시각이 포함된 KRX 사전반증 일별 JSON. 생략 시 기존 data catalog만 감사",
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-dir",
+            help="JSON/Markdown 리포트 디렉터리. 기본값은 var/reports/h1_prefalsification",
+        ),
+    ] = None,
+    seed: int = typer.Option(7, "--seed", help="permutation·block bootstrap 결정론 seed"),
+    permutations: int = typer.Option(
+        2000, "--permutations", min=1, help="날짜 permutation 횟수"
+    ),
+    bootstrap_resamples: int = typer.Option(
+        2000, "--bootstrap-resamples", min=1, help="거래일 block bootstrap 횟수"
+    ),
+) -> None:
+    """무료 KRX 일별 proxy로 H1 라이브 수집 착수 전 사전반증을 실행한다."""
+
+    from skhy_research.application.h1_prefalsification_study import (
+        PrefalsificationStudyConfig,
+        audit_existing_krx_daily_data,
+        build_data_unavailable_result,
+        load_prefalsification_observations_json,
+        run_prefalsification_study,
+        write_prefalsification_reports,
+    )
+
+    settings: Settings = ctx.obj
+    if input_json is None:
+        result = build_data_unavailable_result(
+            audit_existing_krx_daily_data(settings.data_root)
+        )
+    else:
+        observations = load_prefalsification_observations_json(input_json)
+        result = run_prefalsification_study(
+            observations,
+            PrefalsificationStudyConfig(
+                seed=seed,
+                permutations=permutations,
+                bootstrap_resamples=bootstrap_resamples,
+            ),
+        )
+    resolved_output = output_dir or settings.var_root / "reports" / "h1_prefalsification"
+    basename = f"h1_prefalsification_{result.data_snapshot_hash[:12]}"
+    json_path, markdown_path = write_prefalsification_reports(
+        result, resolved_output, basename=basename
+    )
+    typer.echo("--- H1 historical pre-falsification study ---")
+    typer.echo(
+        f"status={result.status.value} verdict={result.verdict.value} "
+        f"scope={result.promotion_scope} paper_only={result.paper_only}"
+    )
+    typer.echo(
+        f"scheduled={result.scheduled_observations} raw={result.raw_eligible_count} "
+        f"controlled={result.controlled_eligible_count}"
+    )
+    for label, model in (("raw", result.raw_model), ("controlled", result.controlled_model)):
+        if model is None:
+            typer.echo(f"{label}=NOT_COMPUTABLE")
+            continue
+        statistics = model.statistics
+        typer.echo(
+            f"{label}: beta={statistics.beta} hac_t={statistics.t_statistic} "
+            f"permutation_p={statistics.permutation_p_value} "
+            f"block_ci={statistics.block_bootstrap_ci} verdict={model.verdict.value}"
+        )
+    typer.echo(f"reasons={list(result.reasons)}")
+    typer.echo(f"json_report={json_path}")
+    typer.echo(f"markdown_report={markdown_path}")
 
 
 def _parse_end_date(value: str | None) -> date:
