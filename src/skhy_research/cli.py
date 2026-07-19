@@ -523,6 +523,149 @@ def h1_prefalsification_study_command(
     typer.echo(f"markdown_report={markdown_path}")
 
 
+@app.command("general-flow-study")
+def general_flow_study_command(
+    ctx: typer.Context,
+    skhy_investor_csv: Annotated[
+        Path | None,
+        typer.Option("--skhy-investor-csv", help="000660 투자자별 순매수대금 CSV"),
+    ] = None,
+    samsung_investor_csv: Annotated[
+        Path | None,
+        typer.Option("--samsung-investor-csv", help="005930 투자자별 순매수대금 CSV"),
+    ] = None,
+    semiconductor_investor_csv: Annotated[
+        Path | None,
+        typer.Option(
+            "--semiconductor-investor-csv",
+            help="반도체 관련 집계 투자자별 순매수대금 CSV",
+        ),
+    ] = None,
+    market_investor_csv: Annotated[
+        Path | None,
+        typer.Option("--market-investor-csv", help="시장 투자자별 순매수대금 CSV"),
+    ] = None,
+    short_sale_csv: Annotated[
+        Path | None,
+        typer.Option("--short-sale-csv", help="[MDCSTAT300] 000660 공매도 종합정보 CSV"),
+    ] = None,
+    price_snapshot: Annotated[
+        Path | None,
+        typer.Option(
+            "--price-snapshot",
+            help="KRX weak daily 가격 snapshot. 생략 시 data_root의 최신 파일",
+        ),
+    ] = None,
+    investor: str = typer.Option("외국인 합계", "--investor", help="네 CSV에 공통으로 있는 투자자 컬럼"),
+    train_end: str | None = typer.Option(
+        None,
+        "--train-end",
+        help="G9 잔차화 계수 train 봉인 종료일(YYYY-MM-DD). 생략 시 HOLD",
+    ),
+    actual_listing_date: str = typer.Option(
+        "2026-05-27", "--actual-listing-date", help="국내 레버리지 상품 실제 상장일"
+    ),
+    fake_listing_dates: str = typer.Option(
+        "2024-05-27,2025-05-27",
+        "--fake-listing-dates",
+        help="D3 가짜 상장일(쉼표 구분)",
+    ),
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", help="G9 JSON/Markdown 리포트 디렉터리"),
+    ] = None,
+    seed: int = typer.Option(7, "--seed"),
+    permutations: int = typer.Option(2000, "--permutations", min=1),
+    bootstrap_resamples: int = typer.Option(2000, "--bootstrap-resamples", min=1),
+) -> None:
+    """G9 일반수급·공매도와 D3 음성대조를 실행한다(페이퍼 전용)."""
+
+    from skhy_research.application.general_flow_study_runner import (
+        execute_general_flow_study,
+    )
+    from skhy_research.features.g9_idiosyncratic_flow import InvestorFlowScope
+    from skhy_research.prefalsification.general_flow_study import (
+        GeneralFlowStudyConfig,
+        write_general_flow_reports,
+    )
+
+    settings: Settings = ctx.obj
+    paths = {
+        scope: path
+        for scope, path in (
+            (InvestorFlowScope.SKHY_000660, skhy_investor_csv),
+            (InvestorFlowScope.SAMSUNG_005930, samsung_investor_csv),
+            (InvestorFlowScope.SEMICONDUCTOR, semiconductor_investor_csv),
+            (InvestorFlowScope.MARKET, market_investor_csv),
+        )
+        if path is not None
+    }
+    resolved_snapshot = price_snapshot or _latest_weak_daily_snapshot(settings.data_root)
+    resolved_train_end = _parse_optional_iso_date(train_end, "--train-end")
+    resolved_listing = _parse_optional_iso_date(
+        actual_listing_date, "--actual-listing-date"
+    )
+    assert resolved_listing is not None
+    resolved_fake_dates = tuple(
+        parsed
+        for item in fake_listing_dates.split(",")
+        if (parsed := _parse_optional_iso_date(item.strip(), "--fake-listing-dates"))
+        is not None
+    )
+    execution = execute_general_flow_study(
+        data_root=settings.data_root,
+        price_snapshot_path=resolved_snapshot,
+        investor_csv_paths=paths,
+        short_sale_csv_path=short_sale_csv,
+        investor=investor,
+        train_end=resolved_train_end,
+        actual_product_listing_date=resolved_listing,
+        fake_listing_dates=resolved_fake_dates,
+        config=GeneralFlowStudyConfig(
+            seed=seed,
+            permutations=permutations,
+            bootstrap_resamples=bootstrap_resamples,
+        ),
+    )
+    result = execution.study
+    resolved_output = output_dir or settings.var_root / "reports" / "g9_general_flow"
+    basename = f"g9_general_flow_{result.data_snapshot_hash[:12]}"
+    json_path, markdown_path = write_general_flow_reports(
+        result, resolved_output, basename=basename
+    )
+    typer.echo("--- G9 general-flow pre-falsification (paper only) ---")
+    typer.echo(
+        f"status={result.status.value} verdict={result.verdict.value} "
+        f"scheduled={result.scheduled_trading_days} usable={result.usable_observations}"
+    )
+    for availability in execution.open_api_availability:
+        typer.echo(
+            f"open_api {availability.dataset.value}: {availability.status.value} "
+            f"path={availability.permitted_collection_path}"
+        )
+    for artifact in execution.backfill_artifacts:
+        typer.echo(
+            f"artifact={artifact.dataset} records={artifact.record_count} "
+            f"sha256={artifact.content_sha256} duplicate={artifact.duplicate}"
+        )
+    if execution.residualization_fit is not None:
+        fit = execution.residualization_fit
+        typer.echo(
+            f"G9 coefficients train={fit.train_start}..{fit.train_end} n={fit.observation_count} "
+            f"b1={fit.b1_samsung} b2={fit.b2_semiconductor} b3={fit.b3_market}"
+        )
+    if result.primary_model is not None:
+        stats = result.primary_model.statistics
+        typer.echo(
+            f"primary beta/std={stats.beta} HAC_t={stats.t_statistic} "
+            f"permutation_p={stats.permutation_p_value} CI={stats.block_bootstrap_ci}"
+        )
+    typer.echo(f"reasons={list(result.reasons)}")
+    typer.echo(f"warnings={list(result.warnings)}")
+    typer.echo(f"json_report={json_path}")
+    typer.echo(f"markdown_report={markdown_path}")
+
+
 def _parse_end_date(value: str | None) -> date:
     if value is None:
         return datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=1)
@@ -530,6 +673,21 @@ def _parse_end_date(value: str | None) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise typer.BadParameter("--end는 YYYY-MM-DD여야 한다") from exc
+
+
+def _parse_optional_iso_date(value: str | None, option_name: str) -> date | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter(f"{option_name}은 YYYY-MM-DD여야 한다") from exc
+
+
+def _latest_weak_daily_snapshot(data_root: Path) -> Path | None:
+    root = data_root / "historical" / "h1_prefalsification" / "weak_daily_v1"
+    candidates = tuple(sorted(root.glob("krx_weak_daily_inputs_*.json")))
+    return candidates[-1] if candidates else None
 
 
 def _parse_nonnegative_decimal(value: str, option_name: str) -> Decimal:

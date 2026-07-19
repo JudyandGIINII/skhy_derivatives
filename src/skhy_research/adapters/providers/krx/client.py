@@ -10,6 +10,12 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from skhy_research.adapters.providers.http_support import request_json, require_secret
+from skhy_research.adapters.providers.krx.research_data import (
+    KrxResearchDataset,
+    KrxResearchDatasetAvailability,
+    reject_unlisted_open_api_dataset,
+    research_dataset_availability,
+)
 from skhy_research.domain.provider_capability import (
     HealthStatus,
     ProviderCapability,
@@ -85,6 +91,31 @@ class KrxReadOnlyClient:
     def fetch_daily_kospi_index_trades(self, trading_date: date) -> list[dict[str, Any]]:
         """KOSPI 시리즈 일별시세정보를 조회한다."""
         return self._fetch_daily_records(_DAILY_KOSPI_INDEX_PATH, trading_date)
+
+    def research_dataset_availability(
+        self,
+    ) -> tuple[KrxResearchDatasetAvailability, ...]:
+        """일반수급·공매도의 공식 Open API 제공 범위를 반환한다."""
+
+        return research_dataset_availability()
+
+    def fetch_investor_net_buy_notional(self, trading_date: date) -> list[dict[str, Any]]:
+        """미제공 항목의 추측 엔드포인트 호출을 fail-closed로 차단한다."""
+
+        del trading_date
+        reject_unlisted_open_api_dataset(KrxResearchDataset.INVESTOR_NET_BUY)
+        return []
+
+    def fetch_short_selling_comprehensive(
+        self, trading_date: date, *, symbol: str
+    ) -> list[dict[str, Any]]:
+        """[MDCSTAT300]은 Open API가 아니므로 수동 CSV 경로만 허용한다."""
+
+        del trading_date, symbol
+        reject_unlisted_open_api_dataset(
+            KrxResearchDataset.SHORT_SELLING_COMPREHENSIVE
+        )
+        return []
 
     def _fetch_daily_records(
         self, endpoint_path: str, trading_date: date
