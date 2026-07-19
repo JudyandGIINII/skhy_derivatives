@@ -1,0 +1,22 @@
+{
+  "OutBlock_1": [
+    {
+      "BAS_DD": "20260716",
+      "ISU_CD": "520101",
+      "ISU_NM": "미래에셋 레버리지 SK하이닉스 단일종목ETN",
+      "IDX_IND_NM": "KRX SK하이닉스 TR 레버리지 지수",
+      "PER1SECU_INDIC_VAL": "14278.21",
+      "LIST_SHRS": "5000000",
+      "TDD_CLSPRC": "14335"
+    },
+    {
+      "BAS_DD": "20260716",
+      "ISU_CD": "580063",
+      "ISU_NM": "KB 레버리지 반도체 TOP10 ETN",
+      "IDX_IND_NM": "FnGuide 반도체 TOP10 레버리지 지수",
+      "PER1SECU_INDIC_VAL": "20234.10",
+      "LIST_SHRS": "1000000",
+      "TDD_CLSPRC": "20250"
+    }
+  ]
+}

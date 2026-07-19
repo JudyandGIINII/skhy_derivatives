@@ -1,0 +1,4 @@
+# CI 환경 override. 실제 키 없이 fixture 기반 테스트만 실행한다.
+database_url_env: SKHY_DATABASE_URL
+data_root: "./var/ci-data"
+var_root: "./var/ci-run"

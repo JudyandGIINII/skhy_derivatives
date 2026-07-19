@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: skhy_postgres
+    environment:
+      POSTGRES_USER: skhy
+      POSTGRES_PASSWORD: skhy_local_dev
+      POSTGRES_DB: skhy_research
+    ports:
+      - "5432:5432"
+    volumes:
+      - skhy_postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-test-database.sql:/docker-entrypoint-initdb.d/10-init-test-database.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skhy -d skhy_research"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  skhy_postgres_data:

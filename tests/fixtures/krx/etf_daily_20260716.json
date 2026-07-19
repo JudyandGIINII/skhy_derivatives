@@ -1,0 +1,40 @@
+{
+  "OutBlock_1": [
+    {
+      "BAS_DD": "20260716",
+      "ISU_CD": "0193T0",
+      "ISU_NM": "KODEX SK하이닉스단일종목레버리지",
+      "IDX_IND_NM": "KRX SK하이닉스 지수",
+      "NAV": "14497.91",
+      "LIST_SHRS": "260825000",
+      "TDD_CLSPRC": "14585"
+    },
+    {
+      "BAS_DD": "20260716",
+      "ISU_CD": "0197X0",
+      "ISU_NM": "SOL SK하이닉스선물단일종목인버스2X",
+      "IDX_IND_NM": "KRX SK하이닉스 선물 지수",
+      "NAV": "11332.37",
+      "LIST_SHRS": "14125000",
+      "TDD_CLSPRC": "11205"
+    },
+    {
+      "BAS_DD": "20260716",
+      "ISU_CD": "0177N0",
+      "ISU_NM": "KODEX 삼성전자SK하이닉스채권혼합50",
+      "IDX_IND_NM": "Wise 삼성전자 SK하이닉스 채권혼합 지수",
+      "NAV": "14088.03",
+      "LIST_SHRS": "103000000",
+      "TDD_CLSPRC": "14085"
+    },
+    {
+      "BAS_DD": "20260716",
+      "ISU_CD": "BROKEN",
+      "ISU_NM": "TEST SK하이닉스단일종목",
+      "IDX_IND_NM": "KRX SK하이닉스 지수",
+      "NAV": "10000",
+      "LIST_SHRS": "1000",
+      "TDD_CLSPRC": "10000"
+    }
+  ]
+}

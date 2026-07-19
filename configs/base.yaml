@@ -1,0 +1,50 @@
+# PRD 11.2/10.6 기본값. environments/*.yaml에서 부분 override 가능.
+# 여기 값은 모두 문서화된 기본값이며 비밀값을 포함하지 않는다.
+
+broker_mode: paper  # paper 이외 값은 부팅 실패 (P0-03)
+
+risk:
+  max_risk_per_trade_pct: 0.25       # 거래당 최대 위험, 계좌 기준자산 대비 %
+  max_daily_loss_pct: 1.0            # 일일 최대 손실 %
+  max_cumulative_mdd_pct: 5.0        # 누적 MDD 킬스위치 %
+  extended_hours_order_type: LIMIT   # 연장시간 주문 유형: 지정가만
+  h1_quote_max_age_seconds: 2        # H1 의사결정 시 호가 최대 나이
+  h2h3_quote_max_age_seconds: 5      # H2/H3 동시시장 호가 최대 나이
+  leg_timeout_seconds: 5             # 한쪽 다리 허용시간 기본값 (fill_model_version에서 재정의 가능)
+
+promotion:
+  min_expectancy: 0.0                # 비용 후 거래당 기대값 > 0
+  min_profit_factor: 1.2
+  stress_min_cumulative_pnl: 0.0     # 2배 비용 스트레스에서 누적손익 >= 0
+  max_single_day_profit_share: 0.30  # 단일 거래일 최대 이익 기여도
+  max_strategy_mdd_pct: 5.0
+
+h1:
+  signal_snapshot_time_kst: "15:10:00"
+  order_intent_cutoff_kst: "15:19:30"
+  entry_window_end_kst: "15:20:00"
+  min_krx_trading_days: 120
+  split_train_days: 60
+  split_validation_days: 30
+  split_test_days: 30
+
+h2:
+  common_ratio_common_to_adr: 10     # 보통주 1 : ADR 10
+  min_forward_paper_trading_days: 60
+  min_qualified_signals: 30
+
+h3:
+  common_ratio_common_to_adr: 10
+  sync_sample_windows_seconds: [1, 5, 60]
+  max_holding_minutes: 30
+  min_forward_paper_trading_days: 60
+  min_qualified_signals: 30
+  # PRD 10.2: SKHY 거래 개시일 이후만 실제 데이터로 사용
+  skhy_trading_start_date: "2026-07-10"
+
+quality:
+  stale_reference: true              # 닫힌 시장 참조 시 stale_reference 강제
+  provider_divergence_blocks_signal: true
+
+cost_stress_multiplier: 2.0
+liquidity_stress_divisor: 2.0

@@ -1,0 +1,28 @@
+{
+  "prices": [
+    {
+      "symbol": "000660",
+      "timestamp": "2026-07-16T15:10:00.100+09:00",
+      "lastPrice": "1835000",
+      "currency": "KRW"
+    },
+    {
+      "symbol": "0193T0",
+      "timestamp": "2026-07-16T15:10:00.200+09:00",
+      "lastPrice": "14580",
+      "currency": "KRW"
+    }
+  ],
+  "orderbook": {
+    "timestamp": "2026-07-16T15:10:06.000+09:00",
+    "currency": "KRW",
+    "asks": [
+      {"price": "1837000", "volume": "910"},
+      {"price": "1838000", "volume": "496"}
+    ],
+    "bids": [
+      {"price": "1836000", "volume": "323"},
+      {"price": "1835000", "volume": "2063"}
+    ]
+  }
+}

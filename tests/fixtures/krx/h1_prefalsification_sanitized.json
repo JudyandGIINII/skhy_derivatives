@@ -1,0 +1,77 @@
+{
+  "data_origin": "SANITIZED_FIXTURE",
+  "observations": [
+    {
+      "trading_date": "2026-07-16",
+      "symbol": "000660",
+      "auction_start_utc": 1784182800000000000,
+      "auction_end_utc": 1784183400000000000,
+      "program_net_buy_notional": {
+        "value": "1250000000",
+        "event_time_utc": 1784183400000000000,
+        "available_at_utc": 1784183400000000000,
+        "source": "KRX_INFORMATION_PORTAL_12009",
+        "unit": "KRW",
+        "input_record_id": "sanitized-program-20260716"
+      },
+      "pre_auction_reference_price": {
+        "value": "509000",
+        "event_time_utc": 1784182799000000000,
+        "available_at_utc": 1784182799500000000,
+        "source": "KRX_PRE_AUCTION_REFERENCE",
+        "unit": "KRW",
+        "input_record_id": "sanitized-preauction-20260716"
+      },
+      "official_close_price": {
+        "value": "510000",
+        "event_time_utc": 1784183400000000000,
+        "available_at_utc": 1784183400000000000,
+        "source": "KRX_OFFICIAL_CLOSE",
+        "unit": "KRW",
+        "input_record_id": "sanitized-close-20260716"
+      },
+      "close_auction_turnover_notional": {
+        "value": "58000000000",
+        "event_time_utc": 1784183400000000000,
+        "available_at_utc": 1784183400000000000,
+        "source": "KRX_CLOSE_AUCTION_DAILY",
+        "unit": "KRW",
+        "input_record_id": "sanitized-auction-20260716"
+      },
+      "total_turnover_notional": {
+        "value": "1180000000000",
+        "event_time_utc": 1784183400000000000,
+        "available_at_utc": 1784183400000000000,
+        "source": "KRX_OPEN_API_STK_BYDD_TRD",
+        "unit": "KRW",
+        "input_record_id": "sanitized-turnover-20260716"
+      },
+      "control_returns": {
+        "kospi_return": {
+          "value": "0.004",
+          "event_time_utc": 1784183400000000000,
+          "available_at_utc": 1784183400000000000,
+          "source": "KRX_KOSPI_DAILY",
+          "unit": "RETURN",
+          "input_record_id": "sanitized-kospi-20260716"
+        },
+        "krx_semiconductor_return": {
+          "value": "0.007",
+          "event_time_utc": 1784183400000000000,
+          "available_at_utc": 1784183400000000000,
+          "source": "KRX_SEMICONDUCTOR_DAILY",
+          "unit": "RETURN",
+          "input_record_id": "sanitized-sector-20260716"
+        },
+        "samsung_005930_return": {
+          "value": "0.003",
+          "event_time_utc": 1784183400000000000,
+          "available_at_utc": 1784183400000000000,
+          "source": "KRX_OPEN_API_STK_BYDD_TRD",
+          "unit": "RETURN",
+          "input_record_id": "sanitized-samsung-20260716"
+        }
+      }
+    }
+  ]
+}

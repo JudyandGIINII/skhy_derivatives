@@ -1,0 +1,5 @@
+# 사용자 키 주입 환경의 조회 전용 smoke test 전용 override.
+# 이 환경에서도 broker_mode는 paper로 고정되며 실주문 경로는 존재하지 않는다.
+database_url_env: SKHY_DATABASE_URL
+data_root: "./var/smoke-data"
+var_root: "./var/smoke-run"
