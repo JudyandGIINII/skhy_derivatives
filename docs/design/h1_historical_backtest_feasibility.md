@@ -71,3 +71,20 @@
    - 회귀계수 $\beta_1$ 의 t-통계량이 1.96 이하(p-value > 0.05)이거나, 부호가 음수일 경우 본 전략의 핵심 가설은 **사전 반증(Falsified)**된 것으로 판정하여 프로젝트를 피벗하거나 개발을 전면 재검토합니다.
 4. **효과**:
    - 이 반증 프로세스를 통과한 경우에만 6개월 라이브 데이터 캡처를 지속함으로써, 불필요한 시스템 운영 비용과 연구 리소스를 대폭 절감할 수 있습니다.
+
+---
+
+## 부록: [12009] 수동 CSV 적재로 weak 파일럿 실행하기
+
+KRX Open API는 종목별 일별 프로그램매매를 제공하지 않으므로(가격/시세/지수 API만 등재), X(프로그램 순매수)는 사용자가 수동으로 내려받아 주입한다. 적재 어댑터(`load_krx_12009_program_net_buy`)와 CLI `--program-csv`가 이를 지원한다.
+
+1. **다운로드(무료·키 불필요)**: `data.krx.co.kr` → 통계 → **[12009] 프로그램매매 거래실적(종목별)** → 종목 `000660`, 최근 3년, 일별 → CSV/Excel 내보내기. 저장 위치 예: `data/historical/h1_prefalsification/krx_12009_000660.csv`.
+2. **CSV 형식**: 어댑터는 날짜 컬럼(`일자`/`날짜`/`trading_date`)과 **전체(합계) 순매수 거래대금** 컬럼(`…순매수…거래대금`, `전체`/`합계` 우선)을 자동 식별한다. CP949/EUC-KR/UTF-8 인코딩과 콤마·부호를 처리한다. 순매수대금 컬럼이 모호(복수)하거나 부재하면 추정 없이 fail-closed 오류를 낸다. 정규화 2열 CSV(`trading_date,program_net_buy_notional`)도 그대로 허용한다.
+3. **실행**:
+   ```bash
+   SKHY_SECRET_BACKEND=keychain uv run skhy-research prefalsification-study \
+     --weak-daily-v1 \
+     --program-csv data/historical/h1_prefalsification/krx_12009_000660.csv
+   ```
+   OHLCV·KOSPI는 KRX 조회전용 키로 자동 수집되고, X는 CSV에서 채워진다. 반도체지수는 현재 키 권한 밖이면 통제변수에서 결측 처리된다(추정 없음).
+4. **해석 경고(재확인)**: 이 weak 파일럿에서 **PROCEED는 라이브 착수의 약한 청신호**일 뿐이고, **FALSIFY는 false-negative 위험이 커 프로젝트 pivot 근거로 신뢰하지 않는다**(일별 종일 집계·시가→종가 근사 Y의 한계). 신뢰할 FALSIFY는 15:20 직전가 기반 강스펙 다중회귀에서만 성립한다(`docs/design/h1_prefalsification_methodology_notes.md`).

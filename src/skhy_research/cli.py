@@ -421,6 +421,16 @@ def h1_prefalsification_study_command(
         min=1,
         help="weak 수집 목표 거래일(기본 756, PRD 10.2 3년 표본)",
     ),
+    program_csv: Annotated[
+        Path | None,
+        typer.Option(
+            "--program-csv",
+            help=(
+                "data.krx.co.kr [12009] 종목별 프로그램매매 수동 CSV 경로"
+                "(합계 순매수대금). weak_daily_v1의 X(프로그램 순매수)를 채운다"
+            ),
+        ),
+    ] = None,
 ) -> None:
     """무료 KRX 일별 proxy로 H1 라이브 수집 착수 전 사전반증을 실행한다."""
 
@@ -464,6 +474,7 @@ def h1_prefalsification_study_command(
                 end=resolved_end,
                 output_path=snapshot_path,
                 minimum_trading_days=minimum_trading_days,
+                program_csv_path=program_csv,
             )
         finally:
             client.close()

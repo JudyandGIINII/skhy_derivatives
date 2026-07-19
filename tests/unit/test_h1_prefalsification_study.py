@@ -34,6 +34,7 @@ from skhy_research.application.h1_prefalsification_study import (
     build_weak_daily_rows,
     collect_krx_weak_daily_inputs,
     fit_prefalsification_regression,
+    load_krx_12009_program_net_buy,
     run_prefalsification_study,
     run_weak_daily_prefalsification_study,
     write_prefalsification_reports,
@@ -480,3 +481,126 @@ def test_weak_collection_preserves_missing_program_and_endpoint_evidence(tmp_pat
         "NOT_IN_OFFICIAL_KRX_OPEN_API_CATALOG"
     )
     assert all(row["program_net_buy_notional"] is None for row in payload["observations"])
+
+
+_KRX_12009_HEADER = (
+    "일자,종목코드,종목명,"
+    "차익_순매수_거래대금,비차익_순매수_거래대금,"
+    "전체_순매수_거래량,전체_순매수_거래대금"
+)
+
+
+def _write_program_csv(path, rows: list[str], *, header: str = _KRX_12009_HEADER):
+    path.write_text("\n".join([header, *rows]) + "\n", encoding="utf-8")
+    return path
+
+
+def test_program_csv_loader_detects_total_net_buy_and_preserves_sign(tmp_path) -> None:
+    csv_path = _write_program_csv(
+        tmp_path / "krx12009.csv",
+        [
+            '2026/07/17,000660,SK하이닉스,1000000,2000000,120,"3,000,000"',
+            '2026/07/16,000660,SK하이닉스,-500000,-250000,-30,"-750,000"',
+            "2026/07/15,005930,삼성전자,9,9,9,9999",
+        ],
+    )
+
+    load = load_krx_12009_program_net_buy(csv_path)
+
+    assert load.date_column == "일자"
+    assert load.value_column == "전체_순매수_거래대금"
+    assert load.row_count == 2  # 005930 rows are filtered out for the 000660 target
+    assert load.by_date[date(2026, 7, 17)] == Decimal("3000000")
+    assert load.by_date[date(2026, 7, 16)] == Decimal("-750000")
+    assert list(load.by_date) == sorted(load.by_date)
+    assert len(load.file_sha256) == 64
+
+
+def test_program_csv_loader_accepts_canonical_two_column_schema(tmp_path) -> None:
+    csv_path = (tmp_path / "canonical.csv")
+    csv_path.write_text(
+        "trading_date,program_net_buy_notional\n20260717,3000000\n20260716,-750000\n",
+        encoding="utf-8",
+    )
+    load = load_krx_12009_program_net_buy(csv_path)
+    assert load.value_column == "program_net_buy_notional"
+    assert load.by_date[date(2026, 7, 17)] == Decimal("3000000")
+
+
+def test_program_csv_loader_fails_closed_on_ambiguous_and_missing(tmp_path) -> None:
+    ambiguous = _write_program_csv(
+        tmp_path / "ambiguous.csv",
+        ["20260717,000660,SK하이닉스,1,2,3,4"],
+        header="일자,종목코드,종목명,차익_순매수_거래대금,비차익_순매수_거래대금,순매수_거래량,순매수_거래대금",
+    )
+    try:
+        load_krx_12009_program_net_buy(ambiguous)
+        raise AssertionError("모호한 순매수대금 컬럼은 fail-closed여야 한다")
+    except ValueError as exc:
+        assert "모호" in str(exc)
+
+    no_value = tmp_path / "novalue.csv"
+    no_value.write_text("일자,종가\n20260717,100000\n", encoding="utf-8")
+    try:
+        load_krx_12009_program_net_buy(no_value)
+        raise AssertionError("순매수대금 컬럼 부재는 fail-closed여야 한다")
+    except ValueError as exc:
+        assert "순매수" in str(exc)
+
+
+def test_weak_collection_with_program_csv_fills_x_and_marks_available(tmp_path) -> None:
+    _write_program_csv(
+        tmp_path / "krx12009.csv",
+        [
+            "20260717,000660,SK하이닉스,1,2,3,3000000",
+            "20260716,000660,SK하이닉스,1,2,3,-750000",
+        ],
+    )
+    collection = collect_krx_weak_daily_inputs(
+        _WeakCollectionClient(),
+        end=date(2026, 7, 17),
+        output_path=tmp_path / "weak_inputs.json",
+        minimum_trading_days=2,
+        max_lookback_calendar_days=5,
+        min_request_interval_seconds=0,
+        program_csv_path=tmp_path / "krx12009.csv",
+    )
+
+    programs = {
+        obs.trading_date: obs.program_net_buy_notional
+        for obs in collection.observations
+    }
+    assert programs[date(2026, 7, 17)].value == Decimal("3000000")
+    assert programs[date(2026, 7, 16)].value == Decimal("-750000")
+    assert programs[date(2026, 7, 17)].missing_reason is None
+    assert "MANUAL_CSV" in programs[date(2026, 7, 17)].source
+
+    audit = collection.availability_audit
+    assert "krx_program_trading_daily_12009" not in audit.missing_required_datasets
+    assert audit.dataset_coverage["krx_program_trading_daily_12009"] == 2
+    payload = json.loads((tmp_path / "weak_inputs.json").read_text(encoding="utf-8"))
+    assert payload["program_api_catalog_status"] == "MANUAL_CSV_LOADED"
+    assert payload["program_manual_csv"]["matched_trading_days"] == 2
+
+
+def test_weak_collection_program_csv_missing_date_stays_missing_not_zero(tmp_path) -> None:
+    _write_program_csv(
+        tmp_path / "partial.csv",
+        ["20260717,000660,SK하이닉스,1,2,3,3000000"],
+    )
+    collection = collect_krx_weak_daily_inputs(
+        _WeakCollectionClient(),
+        end=date(2026, 7, 17),
+        output_path=tmp_path / "weak_inputs.json",
+        minimum_trading_days=2,
+        max_lookback_calendar_days=5,
+        min_request_interval_seconds=0,
+        program_csv_path=tmp_path / "partial.csv",
+    )
+    programs = {
+        obs.trading_date: obs.program_net_buy_notional
+        for obs in collection.observations
+    }
+    assert programs[date(2026, 7, 17)].value == Decimal("3000000")
+    assert programs[date(2026, 7, 16)].value is None
+    assert programs[date(2026, 7, 16)].missing_reason == "PROGRAM_12009_CSV_DATE_MISSING"

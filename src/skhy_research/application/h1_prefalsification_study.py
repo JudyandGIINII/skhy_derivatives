@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import math
 import time
@@ -392,11 +394,14 @@ def collect_krx_weak_daily_inputs(
     minimum_trading_days: int = MINIMUM_RAW_TRADING_DAYS,
     max_lookback_calendar_days: int = 1200,
     min_request_interval_seconds: float = 0.2,
+    program_csv_path: Path | None = None,
 ) -> WeakDailyCollectionResult:
     """KRX 조회 전용 API로 weak proxy의 확보 가능 입력만 수집한다.
 
-    Open API 목록에 없는 [12009] program 값은 모든 거래일에
-    ``value=None``으로 보존하며, 이 함수는 어떤 추정값도 생성하지 않는다.
+    Open API 목록에 없는 [12009] program 값은 기본적으로 모든 거래일에
+    ``value=None``으로 보존한다. ``program_csv_path``가 주어지면 사용자가
+    `data.krx.co.kr`에서 수동 내려받은 [12009] CSV의 합계 순매수대금으로만
+    채우며, 이 함수는 어떤 추정값도 생성하지 않는다.
     """
 
     if minimum_trading_days <= 0:
@@ -405,6 +410,19 @@ def collect_krx_weak_daily_inputs(
         raise ValueError("max_lookback_calendar_days가 거래일 목표보다 짧다")
     if min_request_interval_seconds < 0:
         raise ValueError("min_request_interval_seconds는 음수일 수 없다")
+
+    program_load: ProgramTradeCsvLoad | None = None
+    if program_csv_path is not None:
+        program_load = load_krx_12009_program_net_buy(program_csv_path)
+    program_by_date: Mapping[date, Decimal] = (
+        program_load.by_date if program_load is not None else {}
+    )
+    program_file_hash = program_load.file_sha256 if program_load is not None else None
+    program_missing_reason = (
+        "PROGRAM_12009_CSV_DATE_MISSING"
+        if program_load is not None
+        else "PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG"
+    )
 
     last_request_at: float | None = None
 
@@ -420,7 +438,11 @@ def collect_krx_weak_daily_inputs(
             last_request_at = time.monotonic()
 
     endpoint_status: dict[str, str] = {
-        "krx_program_trading_daily_12009": "NOT_IN_OFFICIAL_KRX_OPEN_API_CATALOG",
+        "krx_program_trading_daily_12009": (
+            f"MANUAL_CSV_LOADED:{program_load.file_sha256[:16]}"
+            if program_load is not None
+            else "NOT_IN_OFFICIAL_KRX_OPEN_API_CATALOG"
+        ),
         "krx_stock_daily": "PENDING",
         "krx_kospi_index_daily": "PENDING",
         "krx_semiconductor_index_daily": "PENDING",
@@ -493,6 +515,9 @@ def collect_krx_weak_daily_inputs(
             kospi_row=kospi_row,
             semiconductor_row=semiconductor_row,
             semiconductor_name=semiconductor_name,
+            program_value=program_by_date.get(current),
+            program_file_hash=program_file_hash,
+            program_missing_reason=program_missing_reason,
         )
         observations_descending.append(observation)
         snapshot_records_descending.append(snapshot_record)
@@ -506,12 +531,31 @@ def collect_krx_weak_daily_inputs(
     else:
         endpoint_status["krx_stock_daily"] = "NO_ALIGNED_TARGET_ROWS"
         endpoint_status["krx_kospi_index_daily"] = "NO_ALIGNED_TARGET_ROWS"
+    program_covered = sum(
+        1 for obs in observations if obs.program_net_buy_notional.value is not None
+    )
     snapshot_payload = {
         "model_variant": PrefalsificationModelVariant.WEAK_DAILY_V1.value,
         "source": "KRX_OPEN_API_READ_ONLY",
         "paper_only": True,
         "order_submission_enabled": False,
-        "program_api_catalog_status": "NOT_IN_OFFICIAL_KRX_OPEN_API_CATALOG",
+        "program_api_catalog_status": (
+            "MANUAL_CSV_LOADED"
+            if program_load is not None
+            else "NOT_IN_OFFICIAL_KRX_OPEN_API_CATALOG"
+        ),
+        "program_manual_csv": (
+            {
+                "file_sha256": program_load.file_sha256,
+                "date_column": program_load.date_column,
+                "value_column": program_load.value_column,
+                "encoding": program_load.encoding,
+                "csv_row_count": program_load.row_count,
+                "matched_trading_days": program_covered,
+            }
+            if program_load is not None
+            else None
+        ),
         "endpoint_status": endpoint_status,
         "observations": snapshot_records,
     }
@@ -529,6 +573,8 @@ def collect_krx_weak_daily_inputs(
         available.extend(("krx_daily_ohlcv", "krx_kospi_index_daily"))
     if semiconductor_name is not None:
         available.append("krx_semiconductor_index_daily")
+    if program_covered:
+        available.append("krx_program_trading_daily_12009")
     required = (
         "krx_daily_ohlcv",
         "krx_program_trading_daily_12009",
@@ -548,7 +594,7 @@ def collect_krx_weak_daily_inputs(
             "krx_semiconductor_index_daily": (
                 len(observations) if semiconductor_name is not None else 0
             ),
-            "krx_program_trading_daily_12009": 0,
+            "krx_program_trading_daily_12009": program_covered,
         },
         endpoint_status=endpoint_status,
     )
@@ -556,6 +602,156 @@ def collect_krx_weak_daily_inputs(
         observations=observations,
         availability_audit=audit,
         snapshot_path=str(output_path),
+    )
+
+
+@dataclass(frozen=True)
+class ProgramTradeCsvLoad:
+    """KRX 정보데이터시스템 [12009] 수동 CSV 적재 결과.
+
+    Open API가 제공하지 않는 종목별 일별 프로그램매매 합계 순매수대금을,
+    사용자가 `data.krx.co.kr`에서 수동 내려받은 CSV로만 채운다. 값은 어떤
+    추정도 하지 않고 원본 그대로 파싱하며, 부호(순매수 +/-)를 보존한다.
+    """
+
+    by_date: Mapping[date, Decimal]
+    file_sha256: str
+    date_column: str
+    value_column: str
+    encoding: str
+    row_count: int
+
+
+_PROGRAM_CSV_DATE_HEADERS = ("trading_date", "일자", "날짜", "date", "거래일자")
+_PROGRAM_CSV_SYMBOL_HEADERS = (
+    "종목코드",
+    "단축코드",
+    "종목_코드",
+    "isu_srt_cd",
+    "symbol",
+)
+_PROGRAM_CSV_CANONICAL_VALUE = "program_net_buy_notional"
+
+
+def _looks_like_net_buy_amount(header: str) -> bool:
+    compact = header.replace(" ", "")
+    return "순매수" in compact and ("거래대금" in compact or "대금" in compact)
+
+
+def _parse_program_csv_date(raw: Any) -> date | None:
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        return None
+    digits = (
+        text.replace("-", "").replace("/", "").replace(".", "").replace(" ", "")
+    )
+    if len(digits) == 8 and digits.isdigit():
+        try:
+            return datetime.strptime(digits, "%Y%m%d").date()
+        except ValueError:
+            return None
+    return None
+
+
+def load_krx_12009_program_net_buy(
+    path: Path, *, symbol: str = "000660"
+) -> ProgramTradeCsvLoad:
+    """KRX [12009] 종목별 프로그램매매 수동 CSV에서 합계 순매수대금을 적재한다.
+
+    - 인코딩은 KRX 내보내기 관행(CP949/EUC-KR)과 UTF-8을 모두 시도한다.
+    - 날짜 컬럼과 '전체(합계) 순매수 거래대금' 컬럼을 헤더로 자동 식별한다.
+      식별 실패·모호(복수 후보)·중복 일자는 추정하지 않고 fail-closed로 오류를 낸다.
+    - `program_net_buy_notional` 헤더의 정규화 CSV도 그대로 허용한다.
+    """
+
+    raw = path.read_bytes()
+    file_hash = hashlib.sha256(raw).hexdigest()
+    text: str | None = None
+    used_encoding = ""
+    for encoding in ("utf-8-sig", "cp949", "euc-kr"):
+        try:
+            text = raw.decode(encoding)
+            used_encoding = encoding
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise ValueError(f"[12009] CSV 인코딩을 해독할 수 없다: {path}")
+
+    reader = csv.DictReader(io.StringIO(text))
+    headers = [str(name).strip() for name in (reader.fieldnames or []) if name]
+    if not headers:
+        raise ValueError(f"[12009] CSV에 헤더가 없다: {path}")
+
+    date_column = next(
+        (h for h in headers if h.lower() in _PROGRAM_CSV_DATE_HEADERS), None
+    )
+    if date_column is None:
+        date_column = next(
+            (h for h in headers if "일자" in h or "날짜" in h), None
+        )
+    if date_column is None:
+        raise ValueError(
+            f"[12009] CSV 날짜 컬럼을 찾지 못했다. 헤더: {headers}"
+        )
+
+    canonical = next(
+        (h for h in headers if h.lower() == _PROGRAM_CSV_CANONICAL_VALUE), None
+    )
+    if canonical is not None:
+        value_column = canonical
+    else:
+        candidates = [h for h in headers if _looks_like_net_buy_amount(h)]
+        preferred = [h for h in candidates if "전체" in h or "합계" in h]
+        pool = preferred or candidates
+        if not pool:
+            raise ValueError(
+                "[12009] CSV에서 순매수 거래대금 컬럼을 찾지 못했다. "
+                "'전체(합계) 순매수 거래대금' 컬럼이 필요하다. "
+                f"헤더: {headers}"
+            )
+        if len(pool) > 1:
+            raise ValueError(
+                "[12009] CSV 순매수 거래대금 컬럼이 모호하다(복수 후보). "
+                f"후보: {pool}. 전체/합계 순매수 거래대금 단일 컬럼만 남겨 다시 시도."
+            )
+        value_column = pool[0]
+
+    symbol_column = next(
+        (h for h in headers if h.lower() in _PROGRAM_CSV_SYMBOL_HEADERS), None
+    )
+    normalized_symbol = symbol.strip().zfill(6)
+
+    by_date: dict[date, Decimal] = {}
+    for row in reader:
+        if symbol_column is not None:
+            code = str(row.get(symbol_column, "")).strip().zfill(6)
+            if code and code != normalized_symbol:
+                continue
+        trading_date = _parse_program_csv_date(row.get(date_column))
+        if trading_date is None:
+            continue
+        value = _krx_decimal(row.get(value_column))
+        if value is None:
+            continue
+        if trading_date in by_date:
+            raise ValueError(
+                f"[12009] CSV에 중복 일자가 있다: {trading_date.isoformat()}"
+            )
+        by_date[trading_date] = value
+
+    if not by_date:
+        raise ValueError(
+            f"[12009] CSV에서 {symbol} 유효 행을 찾지 못했다: {path}"
+        )
+
+    return ProgramTradeCsvLoad(
+        by_date=dict(sorted(by_date.items())),
+        file_sha256=file_hash,
+        date_column=date_column,
+        value_column=value_column,
+        encoding=used_encoding,
+        row_count=len(by_date),
     )
 
 
@@ -576,6 +772,9 @@ def _weak_observation_from_krx_rows(
     kospi_row: Mapping[str, Any],
     semiconductor_row: Mapping[str, Any] | None,
     semiconductor_name: str | None,
+    program_value: Decimal | None = None,
+    program_file_hash: str | None = None,
+    program_missing_reason: str = "PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG",
 ) -> tuple[WeakDailyObservation, dict[str, object]]:
     open_utc = _seoul_nanos(trading_date, wall_time(9, 0))
     close_utc = _seoul_nanos(trading_date, wall_time(15, 30))
@@ -602,20 +801,31 @@ def _weak_observation_from_krx_rows(
         if semiconductor_row is not None
         else None
     )
+    program_source = (
+        "KRX_MDS_MANUAL_CSV:[12009]:program_net_buy_notional_total"
+        if program_value is not None
+        else "KRX_OPEN_API_CATALOG_AUDIT"
+    )
+    program_record_id = (
+        f"krx-mds-manual-csv:12009:{trading_date:%Y%m%d}:{program_file_hash[:16]}"
+        if program_value is not None and program_file_hash is not None
+        else None
+    )
+    program_value_obj = _available_value(
+        program_value,
+        event_time_utc=close_utc,
+        available_at_utc=close_utc,
+        source=program_source,
+        unit="KRW",
+        record_id=program_record_id,
+        missing_reason=program_missing_reason,
+    )
     observation = WeakDailyObservation(
         trading_date=trading_date,
         symbol="000660",
         market_open_utc=open_utc,
         official_close_utc=close_utc,
-        program_net_buy_notional=TimedStudyValue(
-            value=None,
-            event_time_utc=None,
-            available_at_utc=None,
-            source="KRX_OPEN_API_CATALOG_AUDIT",
-            unit="KRW",
-            input_record_id=None,
-            missing_reason="PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG",
-        ),
+        program_net_buy_notional=program_value_obj,
         official_open_price=_available_value(
             skhy_open,
             event_time_utc=open_utc,
@@ -697,8 +907,16 @@ def _weak_observation_from_krx_rows(
         "krx_semiconductor_open_to_close_return": (
             str(semiconductor_return) if semiconductor_return is not None else None
         ),
-        "program_net_buy_notional": None,
-        "program_missing_reason": "PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG",
+        "program_net_buy_notional": (
+            str(program_value) if program_value is not None else None
+        ),
+        "program_missing_reason": (
+            None if program_value is not None else program_missing_reason
+        ),
+        "program_source": program_source,
+        "program_file_sha256": (
+            program_file_hash if program_value is not None else None
+        ),
     }
     return observation, snapshot_record
 
