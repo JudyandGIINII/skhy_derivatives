@@ -1,5 +1,6 @@
 # G-03 게이트 조사 증거 문서 (G-03 Investigation Evidence)
 > **조사일시:** 2026-07-19T08:10:23+09:00  
+> **최종수정:** 2026-07-19T10:00:52+09:00 (NXT/KRX 프로그램 피드 수정 및 A1 반증 연계 추가)<br>
 > **대상 API:** 한국투자증권 KIS Developers Open API, 토스증권 Open API  
 
 ## 1. KIS 및 토스증권 Open API 필드별 상세 분석
@@ -8,6 +9,7 @@
 *   **한국투자증권 (KIS Open API):**
     *   **조회형 (REST API):** `/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn` (TR_ID: `FHKST01010200`) 엔드포인트를 통해 예상체결가(`antc_cnpr`) 및 예상체결수량(`antc_vol`) 조회가 가능합니다.
     *   **실시간 수신 (WebSocket):** 웹소켓 실시간 호가/예상체결 등록 (`TR_ID: H0STASP0`)을 구독하면 15:20 ~ 15:30 단일가 매매 시간 동안 실시간 예상체결 데이터를 수신할 수 있습니다.
+    *   **[치명적 설계 한계 및 A1 가정 반증]:** `H0STASP0` 웹소켓 피드가 제공하는 예상체결가 및 예상체결수량은 종가 단일가 매매 시간인 **15:20 ~ 15:30 KST** 동안에만 실시간으로 생성 및 수신됩니다. 15:10 KST 스냅샷 시점에는 여전히 연속장(Continuous Trading)이 진행 중이므로 이 예상체결 정보가 존재하지 않습니다. 따라서 15:10에 예상체결 정보를 획득할 수 있다는 A1 가정은 **물리적으로 반증(FAIL)**되었으며, 15:19:30 주문의도 마감 시간선 내에서 종가 예상체결 데이터를 사용하는 것은 불가능합니다.
     *   **예상체결 불균형 (Imbalance):** KIS API는 예상 체결 가격/수량 및 총 매도/매수 잔량은 제공하지만, 매수/매도 미체결 불균형 수량(Imbalance Size/Direction)을 직접 계산한 단일 필드는 제공하지 않습니다. 총 잔량 차이를 통해 간접적으로 추정해야 합니다.
     *   **한도 및 지연:** REST 호출 한도는 실계좌 초당 20회, 모의계좌 초당 10회입니다. WebSocket은 지연시간이 밀리초(ms) 단위로 매우 짧습니다.
     *   **근거 URL:** [KIS Developers 국내주식 시세 API 가이드](https://apiportal.koreainvestment.com/)
@@ -19,7 +21,11 @@
 ### B. 프로그램매매 순매수 (종목별 · 실시간)
 *   **한국투자증권 (KIS Open API):**
     *   **조회형 (REST API):** `/uapi/domestic-stock/v1/quotations/investor-program-trade-today` 엔드포인트를 통해 당일 프로그램 매매 동향 조회가 가능합니다.
-    *   **실시간 수신 (WebSocket):** 실시간 프로그램매매 데이터를 웹소켓(`TR_ID: H0NXPGM0`)을 통해 실시간으로 수신할 수 있습니다.
+    *   **실시간 수신 (WebSocket):**
+        *   **KRX 주피드 (본장):** `H0STPGM0` (국내주식 실시간프로그램매매-KRX)
+        *   **통합 교차검증 피드:** `H0UNPGM0` (통합 프로그램매매 - 전체 시장 통합 집계)
+        *   **NXT 전용 피드 (대체거래소):** `H0NXPGM0` (국내주식 실시간프로그램매매-NXT)
+        *   **중요 (중복 합산 금지):** 이 세 가지 피드의 값을 단순 합산하여 피처로 사용해서는 안 됩니다. 모델의 주 프로그램 피처로는 KRX 본장 프로그램 매매 피드인 `H0STPGM0`를 사용하고, 통합 피드인 `H0UNPGM0`는 교차 검증 목적으로만 활용하며, 대체거래소 전용 피드(`H0NXPGM0`)는 주 경로에서 제외하여 중복 계산을 차단해야 합니다.
     *   **한도 및 지연:** REST API는 호출 한도 내에서 분/초 단위 조회가 가능하며, WebSocket 실시간 전송은 거래소의 공시 주기(수 초 단위)를 따릅니다.
     *   **근거 URL:** [KIS Developers 실시간 프로그램매매 API 가이드](https://apiportal.koreainvestment.com/)
 *   **토스증권 (Toss Securities Open API):**
