@@ -24,6 +24,8 @@ _DEFAULT_BASE_URL = "https://data-dbg.krx.co.kr"
 _DAILY_STOCK_PATH = "/svc/apis/sto/stk_bydd_trd"
 _DAILY_ETF_PATH = "/svc/apis/etp/etf_bydd_trd"
 _DAILY_ETN_PATH = "/svc/apis/etp/etn_bydd_trd"
+_DAILY_KRX_INDEX_PATH = "/svc/apis/idx/krx_dd_trd"
+_DAILY_KOSPI_INDEX_PATH = "/svc/apis/idx/kospi_dd_trd"
 _SEOUL = ZoneInfo("Asia/Seoul")
 
 
@@ -75,6 +77,14 @@ class KrxReadOnlyClient:
     def fetch_daily_etn_trades(self, trading_date: date) -> list[dict[str, Any]]:
         """ETN 일별매매정보 원문을 조회한다 (`/svc/apis/etp/etn_bydd_trd`)."""
         return self._fetch_daily_records(_DAILY_ETN_PATH, trading_date)
+
+    def fetch_daily_krx_index_trades(self, trading_date: date) -> list[dict[str, Any]]:
+        """KRX 시리즈 일별시세정보를 조회한다."""
+        return self._fetch_daily_records(_DAILY_KRX_INDEX_PATH, trading_date)
+
+    def fetch_daily_kospi_index_trades(self, trading_date: date) -> list[dict[str, Any]]:
+        """KOSPI 시리즈 일별시세정보를 조회한다."""
+        return self._fetch_daily_records(_DAILY_KOSPI_INDEX_PATH, trading_date)
 
     def _fetch_daily_records(
         self, endpoint_path: str, trading_date: date

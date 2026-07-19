@@ -121,6 +121,40 @@ def test_krx_etp_daily_request_uses_verified_path_auth_and_bas_date(
     assert secrets.requested_names == ["KRX_API_KEY"]
 
 
+@pytest.mark.parametrize(
+    ("method_name", "expected_path"),
+    (
+        ("fetch_daily_krx_index_trades", "/svc/apis/idx/krx_dd_trd"),
+        ("fetch_daily_kospi_index_trades", "/svc/apis/idx/kospi_dd_trd"),
+    ),
+)
+def test_krx_index_request_uses_official_path_auth_and_bas_date(
+    method_name: str, expected_path: str
+) -> None:
+    secrets = _RecordingSecrets({"KRX_API_KEY": "krx-test-secret"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == expected_path
+        assert request.url.params["basDd"] == "20260717"
+        assert request.headers["AUTH_KEY"] == "krx-test-secret"
+        return httpx.Response(
+            200,
+            json={"OutBlock_1": [{"BAS_DD": "20260717", "IDX_NM": "test"}]},
+        )
+
+    client = KrxReadOnlyClient(
+        secrets,
+        http_client=_http_client(handler),
+        base_url="https://krx.test",
+    )
+
+    records = getattr(client, method_name)(date(2026, 7, 17))
+
+    assert records[0]["IDX_NM"] == "test"
+    assert secrets.requested_names == ["KRX_API_KEY"]
+
+
 def test_krx_missing_key_fails_before_network() -> None:
     secrets = _RecordingSecrets({})
 

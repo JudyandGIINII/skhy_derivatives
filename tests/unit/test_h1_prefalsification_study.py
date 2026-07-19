@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -13,23 +15,30 @@ import pyarrow.parquet as pq
 from skhy_research.application.h1_prefalsification_study import (
     CONTROL_FACTOR_NAMES,
     PREFALSIFICATION_FIELD_SPECIFICATIONS,
+    WEAK_DAILY_FIELD_SPECIFICATIONS,
     DataAvailabilityAudit,
     PrefalsificationDailyObservation,
     PrefalsificationDataOrigin,
+    PrefalsificationModelVariant,
     PrefalsificationStatus,
     PrefalsificationStudyConfig,
     PrefalsificationVerdict,
     RegressionStatistics,
     RegressionVariant,
     TimedStudyValue,
+    WeakDailyObservation,
     assess_prefalsification_statistics,
     audit_existing_krx_daily_data,
     build_data_unavailable_result,
     build_prefalsification_rows,
+    build_weak_daily_rows,
+    collect_krx_weak_daily_inputs,
     fit_prefalsification_regression,
     run_prefalsification_study,
+    run_weak_daily_prefalsification_study,
     write_prefalsification_reports,
 )
+from skhy_research.ports.errors import ProviderAuthenticationError
 
 _DAY_NS = 86_400 * 1_000_000_000
 _SECOND_NS = 1_000_000_000
@@ -160,6 +169,52 @@ def _fast_config() -> PrefalsificationStudyConfig:
         bootstrap_resamples=200,
         bootstrap_block_days=10,
     )
+
+
+def _weak_observations(
+    count: int = 80,
+    *,
+    origin: PrefalsificationDataOrigin = PrefalsificationDataOrigin.SANITIZED_FIXTURE,
+    missing_program: bool = False,
+) -> tuple[WeakDailyObservation, ...]:
+    result: list[WeakDailyObservation] = []
+    for item in _observations(count, origin=origin):
+        market_open = item.auction_start_utc - (6 * 3_600 + 20 * 60) * _SECOND_NS
+        program = item.program_net_buy_notional
+        if missing_program:
+            program = TimedStudyValue(
+                value=None,
+                event_time_utc=None,
+                available_at_utc=None,
+                source="KRX_OPEN_API_CATALOG_AUDIT",
+                unit="KRW",
+                input_record_id=None,
+                missing_reason="PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG",
+            )
+        opening_value = item.pre_auction_reference_price.value
+        assert opening_value is not None
+        result.append(
+            WeakDailyObservation(
+                trading_date=item.trading_date,
+                symbol=item.symbol,
+                market_open_utc=market_open,
+                official_close_utc=item.auction_end_utc,
+                program_net_buy_notional=program,
+                official_open_price=_value(
+                    opening_value,
+                    event=market_open,
+                    available=item.auction_end_utc,
+                    source="KRX_OPEN_API:stk_bydd_trd:TDD_OPNPRC",
+                    unit="KRW",
+                    record_id=f"weak-open-{item.trading_date}",
+                ),
+                official_close_price=item.official_close_price,
+                total_turnover_notional=item.total_turnover_notional,
+                control_returns=item.control_returns,
+                data_origin=origin,
+            )
+        )
+    return tuple(result)
 
 
 def test_spec_seals_lagged_program_units_timing_and_no_daily_fallback() -> None:
@@ -313,3 +368,115 @@ def test_json_and_markdown_reports_are_written_with_scope_and_statistics(tmp_pat
     assert "라이브 수집 착수 여부" in markdown
     assert "주문 제출: 비활성화" in markdown
     assert "block bootstrap 95% CI" in markdown
+
+
+def test_weak_daily_v1_seals_open_to_close_y_and_keeps_lagged_x() -> None:
+    by_name = {item.name: item for item in WEAK_DAILY_FIELD_SPECIFICATIONS}
+    build = build_weak_daily_rows(_weak_observations(22))
+
+    assert "TDD_CLSPRC(t) / TDD_OPNPRC(t)" in by_name[
+        "y_weak_open_to_close_return"
+    ].transformation
+    assert "1거래일 시차" in by_name["x_program_lag1_adv20"].lookahead_rule
+    assert build.raw_eligible_count == 2
+    expected = Decimal(str(math.log(100100 / 100000)))
+    assert build.rows[0].y_signed_close_auction_notional_adv20 == expected
+    assert "program-19" in build.rows[0].input_record_ids
+
+
+def test_weak_daily_fixture_is_labeled_warned_and_never_decides() -> None:
+    result = run_weak_daily_prefalsification_study(
+        _weak_observations(), _fast_config()
+    )
+
+    assert result.model_variant is PrefalsificationModelVariant.WEAK_DAILY_V1
+    assert result.status is PrefalsificationStatus.FIXTURE_ONLY
+    assert result.verdict is PrefalsificationVerdict.HOLD
+    assert result.raw_model is not None
+    assert any("FALSIFY" in warning and "false-negative" in warning for warning in result.warnings)
+
+
+def test_weak_daily_real_three_year_shape_with_missing_program_is_explicit_hold() -> None:
+    result = run_weak_daily_prefalsification_study(
+        _weak_observations(
+            origin=PrefalsificationDataOrigin.KRX_HISTORICAL_ACTUAL,
+            missing_program=True,
+        ),
+        _fast_config(),
+    )
+
+    assert result.status is PrefalsificationStatus.HOLD_DATA_UNAVAILABLE
+    assert result.raw_model is None
+    assert result.controlled_model is None
+    assert result.missing_reason_counts[
+        "PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG"
+    ] == 60
+
+
+class _WeakCollectionClient:
+    def fetch_daily_krx_index_trades(
+        self, trading_date: date
+    ) -> list[dict[str, Any]]:
+        raise ProviderAuthenticationError("krx", "not-entitled")
+
+    def fetch_daily_stock_trades(
+        self, trading_date: date
+    ) -> list[dict[str, Any]]:
+        basis = trading_date.strftime("%Y%m%d")
+        return [
+            {
+                "BAS_DD": basis,
+                "ISU_CD": "000660",
+                "TDD_OPNPRC": "100000",
+                "TDD_CLSPRC": "101000",
+                "ACC_TRDVAL": "10000000000",
+            },
+            {
+                "BAS_DD": basis,
+                "ISU_CD": "005930",
+                "TDD_OPNPRC": "70000",
+                "TDD_CLSPRC": "70700",
+                "ACC_TRDVAL": "9000000000",
+            },
+        ]
+
+    def fetch_daily_kospi_index_trades(
+        self, trading_date: date
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "BAS_DD": trading_date.strftime("%Y%m%d"),
+                "IDX_NM": "코스피",
+                "OPNPRC_IDX": "3000",
+                "CLSPRC_IDX": "3030",
+            }
+        ]
+
+
+def test_weak_collection_preserves_missing_program_and_endpoint_evidence(tmp_path) -> None:
+    snapshot_path = tmp_path / "weak_inputs.json"
+    collection = collect_krx_weak_daily_inputs(
+        _WeakCollectionClient(),
+        end=date(2026, 7, 17),
+        output_path=snapshot_path,
+        minimum_trading_days=2,
+        max_lookback_calendar_days=5,
+        min_request_interval_seconds=0,
+    )
+
+    assert len(collection.observations) == 2
+    assert collection.observations[0].program_net_buy_notional.value is None
+    assert collection.observations[0].program_net_buy_notional.missing_reason == (
+        "PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG"
+    )
+    audit = collection.availability_audit
+    assert audit.dataset_coverage["krx_daily_ohlcv"] == 2
+    assert "krx_program_trading_daily_12009" in audit.missing_required_datasets
+    assert audit.endpoint_status["krx_semiconductor_index_daily"] == (
+        "AUTHENTICATED_KEY_NOT_ENTITLED_TO_KRX_INDEX_ENDPOINT"
+    )
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert payload["program_api_catalog_status"] == (
+        "NOT_IN_OFFICIAL_KRX_OPEN_API_CATALOG"
+    )
+    assert all(row["program_net_buy_notional"] is None for row in payload["observations"])

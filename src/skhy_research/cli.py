@@ -407,6 +407,20 @@ def h1_prefalsification_study_command(
     bootstrap_resamples: int = typer.Option(
         2000, "--bootstrap-resamples", min=1, help="거래일 block bootstrap 횟수"
     ),
+    weak_daily_v1: bool = typer.Option(
+        False,
+        "--weak-daily-v1",
+        help="실 KRX 조회 전용 API로 3년 weak_daily_v1 입력을 수집·실행",
+    ),
+    end: str | None = typer.Option(
+        None, "--end", help="weak 수집 종료일(YYYY-MM-DD). 기본: 어제"
+    ),
+    minimum_trading_days: int = typer.Option(
+        756,
+        "--minimum-trading-days",
+        min=1,
+        help="weak 수집 목표 거래일(기본 756, PRD 10.2 3년 표본)",
+    ),
 ) -> None:
     """무료 KRX 일별 proxy로 H1 라이브 수집 착수 전 사전반증을 실행한다."""
 
@@ -414,34 +428,69 @@ def h1_prefalsification_study_command(
         PrefalsificationStudyConfig,
         audit_existing_krx_daily_data,
         build_data_unavailable_result,
+        collect_krx_weak_daily_inputs,
         load_prefalsification_observations_json,
         run_prefalsification_study,
+        run_weak_daily_prefalsification_study,
         write_prefalsification_reports,
     )
 
     settings: Settings = ctx.obj
-    if input_json is None:
+    config = PrefalsificationStudyConfig(
+        seed=seed,
+        permutations=permutations,
+        bootstrap_resamples=bootstrap_resamples,
+    )
+    if weak_daily_v1:
+        if input_json is not None:
+            raise typer.BadParameter(
+                "--weak-daily-v1과 --input-json은 동시에 사용할 수 없다"
+            )
+        from skhy_research.adapters.providers.krx import KrxReadOnlyClient
+        from skhy_research.adapters.secrets.factory import build_secret_provider
+
+        resolved_end = _parse_end_date(end)
+        snapshot_path = (
+            settings.data_root
+            / "historical"
+            / "h1_prefalsification"
+            / "weak_daily_v1"
+            / f"krx_weak_daily_inputs_{resolved_end:%Y%m%d}.json"
+        )
+        client = KrxReadOnlyClient(build_secret_provider())
+        try:
+            collection = collect_krx_weak_daily_inputs(
+                client,
+                end=resolved_end,
+                output_path=snapshot_path,
+                minimum_trading_days=minimum_trading_days,
+            )
+        finally:
+            client.close()
+        result = run_weak_daily_prefalsification_study(
+            collection.observations,
+            config,
+            availability_audit=collection.availability_audit,
+        )
+    elif input_json is None:
         result = build_data_unavailable_result(
             audit_existing_krx_daily_data(settings.data_root)
         )
     else:
         observations = load_prefalsification_observations_json(input_json)
-        result = run_prefalsification_study(
-            observations,
-            PrefalsificationStudyConfig(
-                seed=seed,
-                permutations=permutations,
-                bootstrap_resamples=bootstrap_resamples,
-            ),
-        )
+        result = run_prefalsification_study(observations, config)
     resolved_output = output_dir or settings.var_root / "reports" / "h1_prefalsification"
-    basename = f"h1_prefalsification_{result.data_snapshot_hash[:12]}"
+    basename = (
+        f"h1_prefalsification_{result.model_variant.value}_"
+        f"{result.data_snapshot_hash[:12]}"
+    )
     json_path, markdown_path = write_prefalsification_reports(
         result, resolved_output, basename=basename
     )
     typer.echo("--- H1 historical pre-falsification study ---")
     typer.echo(
-        f"status={result.status.value} verdict={result.verdict.value} "
+        f"model_variant={result.model_variant.value} status={result.status.value} "
+        f"verdict={result.verdict.value} "
         f"scope={result.promotion_scope} paper_only={result.paper_only}"
     )
     typer.echo(

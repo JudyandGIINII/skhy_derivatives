@@ -1,8 +1,9 @@
 """무료 KRX 일별 데이터 기반 H1 flow 사전반증 회귀 스터디.
 
-이 모듈은 페이퍼 연구 전용이며 주문·broker 경로를 포함하지 않는다. 표준 KRX
-``stk_bydd_trd``에 없는 프로그램매매·15:20 직전가·종가경매 구간 거래대금을
-전일종가나 합성값으로 대체하지 않고 명시적인 실행보류로 남긴다.
+이 모듈은 페이퍼 연구 전용이며 주문·broker 경로를 포함하지 않는다. strong
+변형은 ``stk_bydd_trd``에 없는 프로그램매매·15:20 직전가·종가경매 구간
+거래대금을 다른 값으로 대체하지 않는다. ``weak_daily_v1``은 시가→종가 수익을
+별도 대체 Y로 라벨하고, 프로그램 X가 없으면 명시적 실행보류로 남긴다.
 """
 
 from __future__ import annotations
@@ -10,19 +11,28 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from datetime import time as wall_time
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pyarrow.parquet as pq
 
+from skhy_research.ports.errors import (
+    ProviderAccessDeniedError,
+    ProviderAuthenticationError,
+)
+
 PREFALSIFICATION_STUDY_VERSION = "h1_prefalsification_lag1_daily_v1"
+WEAK_DAILY_STUDY_VERSION = "h1_prefalsification_weak_daily_v1"
 PREFALSIFICATION_SCOPE = "live-collection-go-no-go-only"
 PREFALSIFICATION_DATA_RESOLUTION = "krx-historical-daily-prefalsification"
 CONTROL_FACTOR_NAMES = (
@@ -42,6 +52,12 @@ DEFAULT_BOOTSTRAP_RESAMPLES = 2000
 BLOCK_BOOTSTRAP_DAYS = 20
 PRE_AUCTION_MAX_AGE_SECONDS = 60
 _NANOSECONDS_PER_SECOND = 1_000_000_000
+_SEOUL = ZoneInfo("Asia/Seoul")
+
+
+class PrefalsificationModelVariant(StrEnum):
+    STRONG_CLOSE_AUCTION_V1 = "strong_close_auction_v1"
+    WEAK_DAILY_V1 = "weak_daily_v1"
 
 
 class PrefalsificationDataOrigin(StrEnum):
@@ -111,6 +127,39 @@ PREFALSIFICATION_FIELD_SPECIFICATIONS = (
     ),
 )
 
+WEAK_DAILY_FIELD_SPECIFICATIONS = (
+    FieldSpecification(
+        name="x_program_lag1_adv20",
+        role="X",
+        source="KRX 정보데이터시스템 [12009] 종목별 프로그램매매 합계 순매수대금",
+        raw_unit="KRW",
+        transformation="program_net_buy_notional(t-1) / mean(total_turnover(t-20..t-1))",
+        timing="t-1 종가 후 공표되어 t 시가 전에 가용",
+        lookahead_rule="당일 종일 프로그램 합계를 당일 Y의 X로 쓰지 않고 1거래일 시차를 고정",
+    ),
+    FieldSpecification(
+        name="y_weak_open_to_close_return",
+        role="Y_WEAK_PROXY",
+        source="KRX Open API stk_bydd_trd 000660 TDD_OPNPRC·TDD_CLSPRC",
+        raw_unit="KRW price -> decimal return",
+        transformation="log(TDD_CLSPRC(t) / TDD_OPNPRC(t))",
+        timing="09:00 시가와 15:30 공식 종가로 구성되며 Y outcome은 종가 후 확정",
+        lookahead_rule=(
+            "Y는 회귀 outcome에만 사용; 15:20 직전가나 종가경매 수익으로 "
+            "오인하지 않음"
+        ),
+    ),
+    FieldSpecification(
+        name="weak_common_factor_returns",
+        role="CONTROL_DIAGNOSTIC",
+        source="KRX KOSPI·KRX 반도체지수·삼성전자 005930 일별 시가→종가 수익률",
+        raw_unit="decimal return",
+        transformation="X와 weak Y를 동일 고정 control matrix에 각각 투영한 FWL 잔차",
+        timing="당일 공식 종가 후 확정되는 사후 nuisance control",
+        lookahead_rule="신호 입력이 아닌 사후 공통요인 제거 진단에만 사용",
+    ),
+)
+
 
 @dataclass(frozen=True)
 class TimedStudyValue:
@@ -160,6 +209,28 @@ class PrefalsificationDailyObservation:
             raise ValueError("사전반증 주대상은 KRX 000660만 허용한다")
         if self.auction_start_utc >= self.auction_end_utc:
             raise ValueError("auction_end_utc는 auction_start_utc보다 늦어야 한다")
+
+
+@dataclass(frozen=True)
+class WeakDailyObservation:
+    """15:20 직전가가 없는 무료 일별 weak proxy 입력."""
+
+    trading_date: date
+    symbol: str
+    market_open_utc: int
+    official_close_utc: int
+    program_net_buy_notional: TimedStudyValue
+    official_open_price: TimedStudyValue
+    official_close_price: TimedStudyValue
+    total_turnover_notional: TimedStudyValue
+    control_returns: Mapping[str, TimedStudyValue]
+    data_origin: PrefalsificationDataOrigin
+
+    def __post_init__(self) -> None:
+        if self.symbol != "000660":
+            raise ValueError("사전반증 주대상은 KRX 000660만 허용한다")
+        if self.market_open_utc >= self.official_close_utc:
+            raise ValueError("official_close_utc는 market_open_utc보다 늦어야 한다")
 
 
 @dataclass(frozen=True)
@@ -214,6 +285,15 @@ class DataAvailabilityAudit:
     missing_required_datasets: tuple[str, ...]
     inspected_paths: tuple[str, ...]
     data_snapshot_hash: str
+    dataset_coverage: Mapping[str, int] = field(default_factory=dict)
+    endpoint_status: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WeakDailyCollectionResult:
+    observations: tuple[WeakDailyObservation, ...]
+    availability_audit: DataAvailabilityAudit
+    snapshot_path: str
 
 
 @dataclass(frozen=True)
@@ -245,6 +325,9 @@ class PrefalsificationStudyResult:
     data_snapshot_hash: str
     input_record_ids: tuple[str, ...]
     warnings: tuple[str, ...]
+    model_variant: PrefalsificationModelVariant = (
+        PrefalsificationModelVariant.STRONG_CLOSE_AUCTION_V1
+    )
     study_version: str = PREFALSIFICATION_STUDY_VERSION
     data_resolution: str = PREFALSIFICATION_DATA_RESOLUTION
     promotion_scope: str = PREFALSIFICATION_SCOPE
@@ -255,6 +338,7 @@ class PrefalsificationStudyResult:
     def to_dict(self) -> dict[str, object]:
         return {
             "study_version": self.study_version,
+            "model_variant": self.model_variant.value,
             "status": self.status.value,
             "verdict": self.verdict.value,
             "reasons": list(self.reasons),
@@ -279,13 +363,406 @@ class PrefalsificationStudyResult:
                     "timing": item.timing,
                     "lookahead_rule": item.lookahead_rule,
                 }
-                for item in PREFALSIFICATION_FIELD_SPECIFICATIONS
+                for item in _field_specifications(self.model_variant)
             ],
             "raw_model": _assessment_dict(self.raw_model),
             "controlled_model": _assessment_dict(self.controlled_model),
             "warnings": list(self.warnings),
             "availability_audit": _availability_audit_dict(self.availability_audit),
         }
+
+
+class _KrxWeakDailyClient(Protocol):
+    def fetch_daily_stock_trades(self, trading_date: date) -> list[dict[str, Any]]: ...
+
+    def fetch_daily_krx_index_trades(
+        self, trading_date: date
+    ) -> list[dict[str, Any]]: ...
+
+    def fetch_daily_kospi_index_trades(
+        self, trading_date: date
+    ) -> list[dict[str, Any]]: ...
+
+
+def collect_krx_weak_daily_inputs(
+    client: _KrxWeakDailyClient,
+    *,
+    end: date,
+    output_path: Path,
+    minimum_trading_days: int = MINIMUM_RAW_TRADING_DAYS,
+    max_lookback_calendar_days: int = 1200,
+    min_request_interval_seconds: float = 0.2,
+) -> WeakDailyCollectionResult:
+    """KRX 조회 전용 API로 weak proxy의 확보 가능 입력만 수집한다.
+
+    Open API 목록에 없는 [12009] program 값은 모든 거래일에
+    ``value=None``으로 보존하며, 이 함수는 어떤 추정값도 생성하지 않는다.
+    """
+
+    if minimum_trading_days <= 0:
+        raise ValueError("minimum_trading_days는 양수여야 한다")
+    if max_lookback_calendar_days < minimum_trading_days:
+        raise ValueError("max_lookback_calendar_days가 거래일 목표보다 짧다")
+    if min_request_interval_seconds < 0:
+        raise ValueError("min_request_interval_seconds는 음수일 수 없다")
+
+    last_request_at: float | None = None
+
+    def paced(fetch: Any, trading_date: date) -> list[dict[str, Any]]:
+        nonlocal last_request_at
+        if last_request_at is not None:
+            remaining = min_request_interval_seconds - (time.monotonic() - last_request_at)
+            if remaining > 0:
+                time.sleep(remaining)
+        try:
+            return cast(list[dict[str, Any]], fetch(trading_date))
+        finally:
+            last_request_at = time.monotonic()
+
+    endpoint_status: dict[str, str] = {
+        "krx_program_trading_daily_12009": "NOT_IN_OFFICIAL_KRX_OPEN_API_CATALOG",
+        "krx_stock_daily": "PENDING",
+        "krx_kospi_index_daily": "PENDING",
+        "krx_semiconductor_index_daily": "PENDING",
+    }
+    semiconductor_name: str | None = None
+    probe = end
+    for _ in range(10):
+        if probe.weekday() >= 5:
+            probe -= timedelta(days=1)
+            continue
+        try:
+            rows = paced(client.fetch_daily_krx_index_trades, probe)
+        except (ProviderAuthenticationError, ProviderAccessDeniedError):
+            endpoint_status["krx_semiconductor_index_daily"] = (
+                "AUTHENTICATED_KEY_NOT_ENTITLED_TO_KRX_INDEX_ENDPOINT"
+            )
+            break
+        names = sorted(
+            str(row.get("IDX_NM", "")).strip()
+            for row in rows
+            if "반도체" in str(row.get("IDX_NM", ""))
+        )
+        if names:
+            semiconductor_name = (
+                "KRX 반도체" if "KRX 반도체" in names else names[0]
+            )
+            endpoint_status["krx_semiconductor_index_daily"] = (
+                f"AVAILABLE:{semiconductor_name}"
+            )
+            break
+        if rows:
+            endpoint_status["krx_semiconductor_index_daily"] = (
+                "NO_SEMICONDUCTOR_SERIES_IN_RESPONSE"
+            )
+            break
+        probe -= timedelta(days=1)
+
+    observations_descending: list[WeakDailyObservation] = []
+    snapshot_records_descending: list[dict[str, object]] = []
+    lower_bound = end - timedelta(days=max_lookback_calendar_days - 1)
+    current = end
+    while current >= lower_bound and len(observations_descending) < minimum_trading_days:
+        if current.weekday() >= 5:
+            current -= timedelta(days=1)
+            continue
+        stock_rows = paced(client.fetch_daily_stock_trades, current)
+        skhy_row = _row_by_name(stock_rows, "ISU_CD", "000660")
+        samsung_row = _row_by_name(stock_rows, "ISU_CD", "005930")
+        if skhy_row is None or samsung_row is None:
+            current -= timedelta(days=1)
+            continue
+        kospi_rows = paced(client.fetch_daily_kospi_index_trades, current)
+        kospi_row = _row_by_name(kospi_rows, "IDX_NM", "코스피")
+        if kospi_row is None:
+            current -= timedelta(days=1)
+            continue
+        semiconductor_row: dict[str, Any] | None = None
+        if semiconductor_name is not None:
+            semiconductor_rows = paced(client.fetch_daily_krx_index_trades, current)
+            semiconductor_row = _row_by_name(
+                semiconductor_rows, "IDX_NM", semiconductor_name
+            )
+            if semiconductor_row is None:
+                current -= timedelta(days=1)
+                continue
+        observation, snapshot_record = _weak_observation_from_krx_rows(
+            current,
+            skhy_row=skhy_row,
+            samsung_row=samsung_row,
+            kospi_row=kospi_row,
+            semiconductor_row=semiconductor_row,
+            semiconductor_name=semiconductor_name,
+        )
+        observations_descending.append(observation)
+        snapshot_records_descending.append(snapshot_record)
+        current -= timedelta(days=1)
+
+    observations = tuple(reversed(observations_descending))
+    snapshot_records = list(reversed(snapshot_records_descending))
+    if observations:
+        endpoint_status["krx_stock_daily"] = "AVAILABLE"
+        endpoint_status["krx_kospi_index_daily"] = "AVAILABLE"
+    else:
+        endpoint_status["krx_stock_daily"] = "NO_ALIGNED_TARGET_ROWS"
+        endpoint_status["krx_kospi_index_daily"] = "NO_ALIGNED_TARGET_ROWS"
+    snapshot_payload = {
+        "model_variant": PrefalsificationModelVariant.WEAK_DAILY_V1.value,
+        "source": "KRX_OPEN_API_READ_ONLY",
+        "paper_only": True,
+        "order_submission_enabled": False,
+        "program_api_catalog_status": "NOT_IN_OFFICIAL_KRX_OPEN_API_CATALOG",
+        "endpoint_status": endpoint_status,
+        "observations": snapshot_records,
+    }
+    encoded = json.dumps(
+        snapshot_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    snapshot_hash = hashlib.sha256(encoded).hexdigest()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(snapshot_payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    available = []
+    if observations:
+        available.extend(("krx_daily_ohlcv", "krx_kospi_index_daily"))
+    if semiconductor_name is not None:
+        available.append("krx_semiconductor_index_daily")
+    required = (
+        "krx_daily_ohlcv",
+        "krx_program_trading_daily_12009",
+        "krx_kospi_index_daily",
+        "krx_semiconductor_index_daily",
+    )
+    audit = DataAvailabilityAudit(
+        ohlcv_bar_count=len(observations) * 2,
+        ohlcv_symbols=("000660", "005930") if observations else (),
+        available_datasets=tuple(sorted(available)),
+        missing_required_datasets=tuple(name for name in required if name not in available),
+        inspected_paths=(str(output_path),),
+        data_snapshot_hash=snapshot_hash,
+        dataset_coverage={
+            "krx_daily_ohlcv": len(observations),
+            "krx_kospi_index_daily": len(observations),
+            "krx_semiconductor_index_daily": (
+                len(observations) if semiconductor_name is not None else 0
+            ),
+            "krx_program_trading_daily_12009": 0,
+        },
+        endpoint_status=endpoint_status,
+    )
+    return WeakDailyCollectionResult(
+        observations=observations,
+        availability_audit=audit,
+        snapshot_path=str(output_path),
+    )
+
+
+def _row_by_name(
+    rows: Sequence[dict[str, Any]], field_name: str, expected: str
+) -> dict[str, Any] | None:
+    return next(
+        (row for row in rows if str(row.get(field_name, "")).strip() == expected),
+        None,
+    )
+
+
+def _weak_observation_from_krx_rows(
+    trading_date: date,
+    *,
+    skhy_row: Mapping[str, Any],
+    samsung_row: Mapping[str, Any],
+    kospi_row: Mapping[str, Any],
+    semiconductor_row: Mapping[str, Any] | None,
+    semiconductor_name: str | None,
+) -> tuple[WeakDailyObservation, dict[str, object]]:
+    open_utc = _seoul_nanos(trading_date, wall_time(9, 0))
+    close_utc = _seoul_nanos(trading_date, wall_time(15, 30))
+    stock_record_id = _record_id("stk_bydd_trd", trading_date, (skhy_row, samsung_row))
+    kospi_record_id = _record_id("kospi_dd_trd", trading_date, (kospi_row,))
+    semiconductor_record_id = (
+        _record_id("krx_dd_trd", trading_date, (semiconductor_row,))
+        if semiconductor_row is not None
+        else None
+    )
+    skhy_open = _krx_decimal(skhy_row.get("TDD_OPNPRC"))
+    skhy_close = _krx_decimal(skhy_row.get("TDD_CLSPRC"))
+    turnover = _krx_decimal(skhy_row.get("ACC_TRDVAL"))
+    samsung_return = _open_to_close_return(
+        samsung_row.get("TDD_OPNPRC"), samsung_row.get("TDD_CLSPRC")
+    )
+    kospi_return = _open_to_close_return(
+        kospi_row.get("OPNPRC_IDX"), kospi_row.get("CLSPRC_IDX")
+    )
+    semiconductor_return = (
+        _open_to_close_return(
+            semiconductor_row.get("OPNPRC_IDX"), semiconductor_row.get("CLSPRC_IDX")
+        )
+        if semiconductor_row is not None
+        else None
+    )
+    observation = WeakDailyObservation(
+        trading_date=trading_date,
+        symbol="000660",
+        market_open_utc=open_utc,
+        official_close_utc=close_utc,
+        program_net_buy_notional=TimedStudyValue(
+            value=None,
+            event_time_utc=None,
+            available_at_utc=None,
+            source="KRX_OPEN_API_CATALOG_AUDIT",
+            unit="KRW",
+            input_record_id=None,
+            missing_reason="PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG",
+        ),
+        official_open_price=_available_value(
+            skhy_open,
+            event_time_utc=open_utc,
+            available_at_utc=close_utc,
+            source="KRX_OPEN_API:stk_bydd_trd:TDD_OPNPRC",
+            unit="KRW",
+            record_id=stock_record_id,
+            missing_reason="WEAK_OPEN_PRICE_MISSING",
+        ),
+        official_close_price=_available_value(
+            skhy_close,
+            event_time_utc=close_utc,
+            available_at_utc=close_utc,
+            source="KRX_OPEN_API:stk_bydd_trd:TDD_CLSPRC",
+            unit="KRW",
+            record_id=stock_record_id,
+            missing_reason="OFFICIAL_CLOSE_MISSING",
+        ),
+        total_turnover_notional=_available_value(
+            turnover,
+            event_time_utc=close_utc,
+            available_at_utc=close_utc,
+            source="KRX_OPEN_API:stk_bydd_trd:ACC_TRDVAL",
+            unit="KRW",
+            record_id=stock_record_id,
+            missing_reason="TOTAL_TURNOVER_MISSING",
+        ),
+        control_returns={
+            "kospi_return": _available_value(
+                kospi_return,
+                event_time_utc=close_utc,
+                available_at_utc=close_utc,
+                source="KRX_OPEN_API:kospi_dd_trd:코스피:OPEN_TO_CLOSE",
+                unit="RETURN",
+                record_id=kospi_record_id,
+                missing_reason="KOSPI_RETURN_MISSING",
+            ),
+            "krx_semiconductor_return": _available_value(
+                semiconductor_return,
+                event_time_utc=close_utc,
+                available_at_utc=close_utc,
+                source=(
+                    f"KRX_OPEN_API:krx_dd_trd:{semiconductor_name}:OPEN_TO_CLOSE"
+                    if semiconductor_name is not None
+                    else "KRX_OPEN_API_ENDPOINT_ENTITLEMENT_AUDIT"
+                ),
+                unit="RETURN",
+                record_id=semiconductor_record_id,
+                missing_reason="KRX_SEMICONDUCTOR_INDEX_UNAVAILABLE",
+            ),
+            "samsung_005930_return": _available_value(
+                samsung_return,
+                event_time_utc=close_utc,
+                available_at_utc=close_utc,
+                source="KRX_OPEN_API:stk_bydd_trd:005930:OPEN_TO_CLOSE",
+                unit="RETURN",
+                record_id=stock_record_id,
+                missing_reason="SAMSUNG_RETURN_MISSING",
+            ),
+        },
+        data_origin=PrefalsificationDataOrigin.KRX_HISTORICAL_ACTUAL,
+    )
+    snapshot_record: dict[str, object] = {
+        "trading_date": trading_date.isoformat(),
+        "stock_record_id": stock_record_id,
+        "kospi_record_id": kospi_record_id,
+        "semiconductor_record_id": semiconductor_record_id,
+        "000660": {
+            "open": str(skhy_open) if skhy_open is not None else None,
+            "close": str(skhy_close) if skhy_close is not None else None,
+            "turnover": str(turnover) if turnover is not None else None,
+        },
+        "005930_open_to_close_return": (
+            str(samsung_return) if samsung_return is not None else None
+        ),
+        "kospi_open_to_close_return": (
+            str(kospi_return) if kospi_return is not None else None
+        ),
+        "krx_semiconductor_open_to_close_return": (
+            str(semiconductor_return) if semiconductor_return is not None else None
+        ),
+        "program_net_buy_notional": None,
+        "program_missing_reason": "PROGRAM_12009_NOT_IN_KRX_OPEN_API_CATALOG",
+    }
+    return observation, snapshot_record
+
+
+def _available_value(
+    value: Decimal | None,
+    *,
+    event_time_utc: int,
+    available_at_utc: int,
+    source: str,
+    unit: str,
+    record_id: str | None,
+    missing_reason: str,
+) -> TimedStudyValue:
+    if value is None:
+        return TimedStudyValue(
+            value=None,
+            event_time_utc=None,
+            available_at_utc=None,
+            source=source,
+            unit=unit,
+            input_record_id=None,
+            missing_reason=missing_reason,
+        )
+    return TimedStudyValue(
+        value=value,
+        event_time_utc=event_time_utc,
+        available_at_utc=available_at_utc,
+        source=source,
+        unit=unit,
+        input_record_id=record_id,
+    )
+
+
+def _krx_decimal(value: Any) -> Decimal | None:
+    normalized = str(value if value is not None else "").replace(",", "").strip()
+    if not normalized or normalized == "-":
+        return None
+    parsed = Decimal(normalized)
+    return parsed if parsed.is_finite() else None
+
+
+def _open_to_close_return(open_value: Any, close_value: Any) -> Decimal | None:
+    opening = _krx_decimal(open_value)
+    closing = _krx_decimal(close_value)
+    if opening is None or closing is None or opening <= 0 or closing <= 0:
+        return None
+    return Decimal(str(math.log(float(closing / opening))))
+
+
+def _record_id(
+    dataset: str, trading_date: date, rows: Sequence[Mapping[str, Any] | None]
+) -> str:
+    encoded = json.dumps(
+        rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    return f"krx-open-api:{dataset}:{trading_date:%Y%m%d}:{digest}"
+
+
+def _seoul_nanos(trading_date: date, clock_time: wall_time) -> int:
+    return int(datetime.combine(trading_date, clock_time, _SEOUL).timestamp()) * (
+        _NANOSECONDS_PER_SECOND
+    )
 
 
 def build_prefalsification_rows(
@@ -315,6 +792,155 @@ def build_prefalsification_rows(
         controlled_eligible_count=sum(row.control_returns is not None for row in rows),
         missing_reason_counts=dict(sorted(reasons.items())),
     )
+
+
+def build_weak_daily_rows(
+    observations: Sequence[WeakDailyObservation],
+) -> RegressionBuildResult:
+    """weak_daily_v1을 lag-1 program과 과거 20일 ADV로만 구성한다."""
+
+    ordered = tuple(observations)
+    dates = [item.trading_date for item in ordered]
+    if dates != sorted(dates) or len(dates) != len(set(dates)):
+        raise ValueError("observation은 중복 없는 거래일 오름차순이어야 한다")
+    if len({item.data_origin for item in ordered}) > 1:
+        raise ValueError("actual과 fixture data origin을 한 study에서 혼합할 수 없다")
+    reasons: Counter[str] = Counter()
+    rows: list[PrefalsificationRegressionRow] = []
+    for index in range(ADV_LOOKBACK_DAYS, len(ordered)):
+        current = ordered[index]
+        previous = ordered[index - PROGRAM_LAG_TRADING_DAYS]
+        adv_window = ordered[index - ADV_LOOKBACK_DAYS : index]
+        row = _build_one_weak_daily_row(current, previous, adv_window, reasons)
+        if row is not None:
+            rows.append(row)
+    return RegressionBuildResult(
+        rows=tuple(rows),
+        scheduled_observations=len(ordered),
+        raw_eligible_count=len(rows),
+        controlled_eligible_count=sum(row.control_returns is not None for row in rows),
+        missing_reason_counts=dict(sorted(reasons.items())),
+    )
+
+
+def _build_one_weak_daily_row(
+    current: WeakDailyObservation,
+    previous: WeakDailyObservation,
+    adv_window: Sequence[WeakDailyObservation],
+    reasons: Counter[str],
+) -> PrefalsificationRegressionRow | None:
+    required = {
+        "PROGRAM_LAG1_MISSING": previous.program_net_buy_notional,
+        "WEAK_OPEN_PRICE_MISSING": current.official_open_price,
+        "OFFICIAL_CLOSE_MISSING": current.official_close_price,
+    }
+    for reason, value in required.items():
+        if value.value is None:
+            reasons[value.missing_reason or reason] += 1
+            return None
+    program = previous.program_net_buy_notional
+    if program.unit != "KRW":
+        reasons["PROGRAM_UNIT_INVALID"] += 1
+        return None
+    if program.available_at_utc is None or program.available_at_utc > current.market_open_utc:
+        reasons["PROGRAM_LAG1_POST_CUTOFF"] += 1
+        return None
+    turnover_values: list[Decimal] = []
+    for observation in adv_window:
+        turnover = observation.total_turnover_notional
+        if turnover.value is None or turnover.value <= 0:
+            reasons[turnover.missing_reason or "ADV_WINDOW_MISSING"] += 1
+            return None
+        if turnover.unit != "KRW":
+            reasons["ADV_UNIT_INVALID"] += 1
+            return None
+        if turnover.available_at_utc is None or turnover.available_at_utc > current.market_open_utc:
+            reasons["ADV_POST_CUTOFF"] += 1
+            return None
+        turnover_values.append(turnover.value)
+    open_price = current.official_open_price
+    close_price = current.official_close_price
+    if open_price.unit != "KRW" or close_price.unit != "KRW":
+        reasons["WEAK_PRICE_UNIT_INVALID"] += 1
+        return None
+    if (
+        open_price.event_time_utc != current.market_open_utc
+        or close_price.event_time_utc != current.official_close_utc
+        or open_price.available_at_utc is None
+        or close_price.available_at_utc is None
+        or open_price.available_at_utc < current.official_close_utc
+        or close_price.available_at_utc < current.official_close_utc
+    ):
+        reasons["WEAK_PRICE_TIMING_INVALID"] += 1
+        return None
+    assert program.value is not None
+    assert open_price.value is not None
+    assert close_price.value is not None
+    if open_price.value <= 0 or close_price.value <= 0:
+        reasons["WEAK_PRICE_INVALID"] += 1
+        return None
+    adv20 = sum(turnover_values, Decimal("0")) / Decimal(ADV_LOOKBACK_DAYS)
+    weak_return = Decimal(str(math.log(float(close_price.value / open_price.value))))
+    controls = _weak_control_values(current, reasons)
+    lineage = _weak_row_lineage(current, previous, adv_window)
+    return PrefalsificationRegressionRow(
+        trading_date=current.trading_date,
+        x_program_lag1_adv20=program.value / adv20,
+        y_signed_close_auction_notional_adv20=weak_return,
+        auction_residual_return=weak_return,
+        adv20_notional=adv20,
+        control_returns=controls,
+        input_record_ids=lineage,
+    )
+
+
+def _weak_control_values(
+    current: WeakDailyObservation, reasons: Counter[str]
+) -> Mapping[str, Decimal] | None:
+    if set(current.control_returns) != set(CONTROL_FACTOR_NAMES):
+        reasons["CONTROL_FACTOR_SCHEMA_INCOMPLETE"] += 1
+        return None
+    controls: dict[str, Decimal] = {}
+    for name in CONTROL_FACTOR_NAMES:
+        observation = current.control_returns[name]
+        if observation.value is None:
+            reasons[observation.missing_reason or f"CONTROL_MISSING:{name}"] += 1
+            return None
+        if observation.unit != "RETURN":
+            reasons[f"CONTROL_UNIT_INVALID:{name}"] += 1
+            return None
+        if (
+            observation.event_time_utc != current.official_close_utc
+            or observation.available_at_utc is None
+            or observation.available_at_utc < current.official_close_utc
+        ):
+            reasons[f"CONTROL_TIMING_INVALID:{name}"] += 1
+            return None
+        controls[name] = observation.value
+    return controls
+
+
+def _weak_row_lineage(
+    current: WeakDailyObservation,
+    previous: WeakDailyObservation,
+    adv_window: Sequence[WeakDailyObservation],
+) -> tuple[str, ...]:
+    values: list[str] = []
+    fields = [
+        previous.program_net_buy_notional,
+        current.official_open_price,
+        current.official_close_price,
+        *(item.total_turnover_notional for item in adv_window),
+        *(current.control_returns.get(name) for name in CONTROL_FACTOR_NAMES),
+    ]
+    for study_value in fields:
+        if (
+            study_value is not None
+            and study_value.input_record_id
+            and study_value.input_record_id not in values
+        ):
+            values.append(study_value.input_record_id)
+    return tuple(values)
 
 
 def _build_one_row(
@@ -460,9 +1086,13 @@ def _row_lineage(
         *(item.total_turnover_notional for item in adv_window),
         *(current.control_returns.get(name) for name in CONTROL_FACTOR_NAMES),
     ]
-    for field in fields:
-        if field is not None and field.input_record_id and field.input_record_id not in values:
-            values.append(field.input_record_id)
+    for study_value in fields:
+        if (
+            study_value is not None
+            and study_value.input_record_id
+            and study_value.input_record_id not in values
+        ):
+            values.append(study_value.input_record_id)
     return tuple(values)
 
 
@@ -757,6 +1387,98 @@ def run_prefalsification_study(
     )
 
 
+def run_weak_daily_prefalsification_study(
+    observations: Sequence[WeakDailyObservation],
+    config: PrefalsificationStudyConfig | None = None,
+    *,
+    availability_audit: DataAvailabilityAudit | None = None,
+) -> PrefalsificationStudyResult:
+    """weak_daily_v1을 실행하되 strong 결론으로 승격시키지 않는다."""
+
+    resolved = config or PrefalsificationStudyConfig()
+    build = build_weak_daily_rows(observations)
+    origin = (
+        observations[0].data_origin
+        if observations
+        else PrefalsificationDataOrigin.KRX_HISTORICAL_ACTUAL
+    )
+    raw_model = _fit_assessment(build.rows, RegressionVariant.RAW, resolved)
+    controlled_model = _fit_assessment(
+        build.rows, RegressionVariant.COMMON_FACTOR_RESIDUAL, resolved
+    )
+    lineage = tuple(
+        dict.fromkeys(record_id for row in build.rows for record_id in row.input_record_ids)
+    )
+    snapshot_hash = _weak_observations_hash(observations)
+    warnings = _study_warnings(PrefalsificationModelVariant.WEAK_DAILY_V1)
+    common = {
+        "origin": origin,
+        "build": build,
+        "raw_model": raw_model,
+        "controlled_model": controlled_model,
+        "snapshot_hash": snapshot_hash,
+        "lineage": lineage,
+        "warnings": warnings,
+        "model_variant": PrefalsificationModelVariant.WEAK_DAILY_V1,
+        "availability_audit": availability_audit,
+    }
+    if origin is PrefalsificationDataOrigin.SANITIZED_FIXTURE:
+        return _study_result(
+            PrefalsificationStatus.FIXTURE_ONLY,
+            PrefalsificationVerdict.HOLD,
+            ("SANITIZED_FIXTURE_NOT_DECISION_ELIGIBLE",),
+            **common,
+        )
+    if build.raw_eligible_count < MINIMUM_REGRESSION_OBSERVATIONS or controlled_model is None:
+        missing_dataset_reasons = (
+            tuple(
+                f"MISSING_DATASET:{name}"
+                for name in availability_audit.missing_required_datasets
+            )
+            if availability_audit is not None
+            else ()
+        )
+        return _study_result(
+            PrefalsificationStatus.HOLD_DATA_UNAVAILABLE,
+            PrefalsificationVerdict.HOLD,
+            (
+                "WEAK_REQUIRED_PROGRAM_OR_CONTROL_DATA_UNAVAILABLE",
+                *missing_dataset_reasons,
+            ),
+            **common,
+        )
+    if (
+        build.scheduled_observations < MINIMUM_RAW_TRADING_DAYS
+        or build.raw_eligible_count < MINIMUM_USABLE_OBSERVATIONS
+        or build.controlled_eligible_count < MINIMUM_USABLE_OBSERVATIONS
+    ):
+        return _study_result(
+            PrefalsificationStatus.HOLD_SAMPLE_INSUFFICIENT,
+            PrefalsificationVerdict.HOLD,
+            ("PRD_10_2_MINIMUM_3Y_SAMPLE_NOT_MET",),
+            **common,
+        )
+    assert raw_model is not None
+    assert controlled_model is not None
+    verdict = (
+        PrefalsificationVerdict.FALSIFY
+        if PrefalsificationVerdict.FALSIFY
+        in (raw_model.verdict, controlled_model.verdict)
+        else PrefalsificationVerdict.PROCEED_TO_LIVE
+    )
+    reasons = tuple(dict.fromkeys((*raw_model.reasons, *controlled_model.reasons)))
+    if verdict is PrefalsificationVerdict.PROCEED_TO_LIVE:
+        reasons = ("WEAK_GREEN_LIGHT_FOR_LIVE_COLLECTION_ONLY",)
+    else:
+        reasons = (*reasons, "WEAK_FALSIFY_NOT_VALID_PIVOT_EVIDENCE")
+    return _study_result(
+        PrefalsificationStatus.COMPLETED,
+        verdict,
+        reasons,
+        **common,
+    )
+
+
 def _fit_assessment(
     rows: Sequence[PrefalsificationRegressionRow],
     variant: RegressionVariant,
@@ -782,6 +1504,10 @@ def _study_result(
     snapshot_hash: str,
     lineage: tuple[str, ...],
     warnings: tuple[str, ...],
+    model_variant: PrefalsificationModelVariant = (
+        PrefalsificationModelVariant.STRONG_CLOSE_AUCTION_V1
+    ),
+    availability_audit: DataAvailabilityAudit | None = None,
 ) -> PrefalsificationStudyResult:
     return PrefalsificationStudyResult(
         status=status,
@@ -797,6 +1523,13 @@ def _study_result(
         data_snapshot_hash=snapshot_hash,
         input_record_ids=lineage,
         warnings=warnings,
+        model_variant=model_variant,
+        study_version=(
+            WEAK_DAILY_STUDY_VERSION
+            if model_variant is PrefalsificationModelVariant.WEAK_DAILY_V1
+            else PREFALSIFICATION_STUDY_VERSION
+        ),
+        availability_audit=availability_audit,
     )
 
 
@@ -958,6 +1691,7 @@ def _markdown_report(result: PrefalsificationStudyResult) -> str:
         f"- 상태: `{result.status.value}`",
         f"- 판정: `{result.verdict.value}`",
         f"- 연구 버전: `{result.study_version}`",
+        f"- model variant: `{result.model_variant.value}`",
         f"- 데이터 origin: `{result.data_origin.value}`",
         f"- 표본: scheduled={result.scheduled_observations}, "
         f"raw={result.raw_eligible_count}, controlled={result.controlled_eligible_count}",
@@ -974,7 +1708,7 @@ def _markdown_report(result: PrefalsificationStudyResult) -> str:
         "| 항 | 역할 | 원천·단위 | 변환·시각 | 룩어헤드 방지 |",
         "| --- | --- | --- | --- | --- |",
     ]
-    for spec in PREFALSIFICATION_FIELD_SPECIFICATIONS:
+    for spec in _field_specifications(result.model_variant):
         lines.append(
             f"| {spec.name} | {spec.role} | {spec.source} / {spec.raw_unit} | "
             f"{spec.transformation}; {spec.timing} | {spec.lookahead_rule} |"
@@ -992,6 +1726,8 @@ def _markdown_report(result: PrefalsificationStudyResult) -> str:
                 f"- symbols: {list(audit.ohlcv_symbols)}",
                 f"- available datasets: {list(audit.available_datasets)}",
                 f"- missing datasets: {list(audit.missing_required_datasets)}",
+                f"- dataset coverage: {dict(audit.dataset_coverage)}",
+                f"- endpoint status: {dict(audit.endpoint_status)}",
                 "",
             ]
         )
@@ -1057,6 +1793,8 @@ def _availability_audit_dict(
         "missing_required_datasets": list(audit.missing_required_datasets),
         "inspected_paths": list(audit.inspected_paths),
         "data_snapshot_hash": audit.data_snapshot_hash,
+        "dataset_coverage": dict(audit.dataset_coverage),
+        "endpoint_status": dict(audit.endpoint_status),
     }
 
 
@@ -1079,6 +1817,26 @@ def _observations_hash(observations: Sequence[PrefalsificationDailyObservation])
     ).hexdigest()
 
 
+def _weak_observations_hash(observations: Sequence[WeakDailyObservation]) -> str:
+    payload = []
+    for item in observations:
+        payload.append(
+            {
+                "date": item.trading_date.isoformat(),
+                "origin": item.data_origin.value,
+                "records": sorted(
+                    record_id
+                    for record_id in _weak_observation_record_ids(item)
+                    if record_id is not None
+                ),
+                "program_missing_reason": item.program_net_buy_notional.missing_reason,
+            }
+        )
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def _observation_record_ids(
     item: PrefalsificationDailyObservation,
 ) -> tuple[str | None, ...]:
@@ -1092,7 +1850,37 @@ def _observation_record_ids(
     )
 
 
-def _study_warnings() -> tuple[str, ...]:
+def _weak_observation_record_ids(item: WeakDailyObservation) -> tuple[str | None, ...]:
+    return (
+        item.program_net_buy_notional.input_record_id,
+        item.official_open_price.input_record_id,
+        item.official_close_price.input_record_id,
+        item.total_turnover_notional.input_record_id,
+        *(value.input_record_id for value in item.control_returns.values()),
+    )
+
+
+def _field_specifications(
+    model_variant: PrefalsificationModelVariant,
+) -> tuple[FieldSpecification, ...]:
+    if model_variant is PrefalsificationModelVariant.WEAK_DAILY_V1:
+        return WEAK_DAILY_FIELD_SPECIFICATIONS
+    return PREFALSIFICATION_FIELD_SPECIFICATIONS
+
+
+def _study_warnings(
+    model_variant: PrefalsificationModelVariant = (
+        PrefalsificationModelVariant.STRONG_CLOSE_AUCTION_V1
+    ),
+) -> tuple[str, ...]:
+    if model_variant is PrefalsificationModelVariant.WEAK_DAILY_V1:
+        return (
+            "WEAK SPEC: Y=log(종가/시가)는 15:20→15:30 종가경매 잔여수익이 아니며 장중 노이즈를 포함한다.",
+            "weak_daily_v1의 PROCEED_TO_LIVE는 라이브 수집 착수에 대한 약한 청신호일 뿐이다.",
+            "weak_daily_v1의 FALSIFY는 false-negative 위험이 커서 피벗·개발 중단 근거로 신뢰하면 안 된다.",
+            "일별 종일 program은 15:00~15:10 라이브 OFI/program flow와 시간 단위가 다르다.",
+            "공통요인은 사후 nuisance control이며 거래 신호가 아니다.",
+        )
     return (
         "일별 종일 프로그램 집계는 라이브 15:00~15:10 OFI/program flow와 다른 저해상도 proxy다.",
         "FALSIFY는 일별 proxy의 반증이며 장말 micro-dynamics의 부재를 증명하지 않는다.",
