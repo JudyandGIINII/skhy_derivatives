@@ -1,0 +1,101 @@
+{
+  "trading_date": "2026-07-20",
+  "records": [
+    {
+      "tr_id": "H0STASP0",
+      "received_time_kst": "2026-07-20T15:00:00.050000+09:00",
+      "provider_sequence": "asp-150000",
+      "values": {
+        "MKSC_SHRN_ISCD": "000660",
+        "BSOP_HOUR": "150000",
+        "HOUR_CLS_CODE": "0",
+        "ASKP1": "280500",
+        "BIDP1": "280000",
+        "ASKP_RSQN1": "1200",
+        "BIDP_RSQN1": "1500",
+        "ANTC_CNPR": "",
+        "ANTC_CNQN": "",
+        "ANTC_VOL": "",
+        "ACML_VOL": "4023000"
+      }
+    },
+    {
+      "tr_id": "H0STPGM0",
+      "received_time_kst": "2026-07-20T15:05:00.040000+09:00",
+      "provider_sequence": "krx-pgm-150500",
+      "values": {
+        "MKSC_SHRN_ISCD": "000660",
+        "STCK_CNTG_HOUR": "150500",
+        "SELN_CNQN": "400",
+        "SELN_TR_PBMN": "112000000",
+        "SHNU_CNQN": "600",
+        "SHNU_TR_PBMN": "168000000",
+        "NTBY_CNQN": "200",
+        "NTBY_TR_PBMN": "56000000"
+      }
+    },
+    {
+      "tr_id": "H0NXPGM0",
+      "received_time_kst": "2026-07-20T15:05:00.060000+09:00",
+      "provider_sequence": "nxt-pgm-150500",
+      "values": {
+        "MKSC_SHRN_ISCD": "000660",
+        "STCK_CNTG_HOUR": "150500",
+        "SELN_CNQN": "200",
+        "SELN_TR_PBMN": "56000000",
+        "SHNU_CNQN": "300",
+        "SHNU_TR_PBMN": "84000000",
+        "NTBY_CNQN": "100",
+        "NTBY_TR_PBMN": "28000000"
+      }
+    },
+    {
+      "tr_id": "H0UNPGM0",
+      "received_time_kst": "2026-07-20T15:05:00.080000+09:00",
+      "provider_sequence": "total-pgm-150500",
+      "values": {
+        "MKSC_SHRN_ISCD": "000660",
+        "STCK_CNTG_HOUR": "150500",
+        "SELN_CNQN": "600",
+        "SELN_TR_PBMN": "168000000",
+        "SHNU_CNQN": "900",
+        "SHNU_TR_PBMN": "252000000",
+        "NTBY_CNQN": "300",
+        "NTBY_TR_PBMN": "84000000"
+      }
+    },
+    {
+      "tr_id": "H0STCNT0",
+      "received_time_kst": "2026-07-20T15:05:00.090000+09:00",
+      "provider_sequence": "trade-150500",
+      "values": {
+        "MKSC_SHRN_ISCD": "000660",
+        "STCK_CNTG_HOUR": "150500",
+        "STCK_PRPR": "280000",
+        "ASKP1": "280500",
+        "BIDP1": "280000",
+        "CNTG_VOL": "5",
+        "ACML_VOL": "4030000",
+        "BSOP_DATE": "20260720"
+      }
+    },
+    {
+      "tr_id": "H0STASP0",
+      "received_time_kst": "2026-07-20T15:20:01.075000+09:00",
+      "provider_sequence": "asp-152001",
+      "values": {
+        "MKSC_SHRN_ISCD": "000660",
+        "BSOP_HOUR": "152001",
+        "HOUR_CLS_CODE": "2",
+        "ASKP1": "281000",
+        "BIDP1": "280500",
+        "ASKP_RSQN1": "2200",
+        "BIDP_RSQN1": "3100",
+        "ANTC_CNPR": "281000",
+        "ANTC_CNQN": "7000",
+        "ANTC_VOL": "125000",
+        "ACML_VOL": "4100000"
+      }
+    }
+  ]
+}
